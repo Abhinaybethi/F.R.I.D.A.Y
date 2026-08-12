@@ -1,0 +1,25 @@
+# Core voice I/O
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+faster-whisper>=1.0.0
+kokoro-onnx>=0.1.0
+piper-tts>=1.2.0
+onnxruntime>=1.15.0
+huggingface-hub>=0.23.0
+
+# Brain / knowledge
+requests>=2.32.0
+duckduckgo-search>=6.2.0
+
+# System control
+psutil>=6.0.0
+
+# Config
+PyYAML>=6.0.2
+
+# --- Optional: Windows-only voice-volume control ---
+# Uncomment these two lines if you're on Windows and want the
+# "set volume to X" voice command to work:
+# pycaw>=20240210
+# comtypes>=1.4.6

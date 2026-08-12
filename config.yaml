@@ -1,0 +1,44 @@
+# Friday Assistant Configuration
+# Edit values here instead of digging through code.
+
+wake_word: "friday"
+
+voice:
+  offline_only: true
+  debug:
+    save_audio: false          # set true during development to inspect captured audio
+    directory: debug_audio     # WAV files saved here: 001.wav, 002.wav, ...
+    playback_audio: false      # prompt to play each WAV after capture
+    max_files: 50              # rotate (overwrite oldest) after this many files
+  vad:
+    enabled: true
+    model_path: "models/vad/silero_vad.onnx"
+  stt:
+    engine: "faster-whisper"
+    model: "small.en"
+    device: "cpu"
+    compute_type: "int8"
+    language: "en"
+  tts:
+    engine: "kokoro"
+    fallback_engine: "piper"
+    kokoro_model: "models/tts/kokoro/kokoro-v1.0.int8.onnx"
+    kokoro_voices: "models/tts/kokoro/voices-v1.0.bin"
+    piper_model: "models/tts/piper/en_US-lessac-low.onnx"
+    piper_config: "models/tts/piper/en_US-lessac-low.onnx.json"
+    voice: "af_heart"
+    speed: 1.0
+    device: "auto"
+
+listening:
+  ambient_noise_calibration_seconds: 1
+  command_timeout_seconds: 6
+  phrase_time_limit_seconds: 8
+
+brain:
+  ollama_url: "http://localhost:11434"
+  ollama_model: "llama3.2"          # run: ollama pull llama3.2  (one-time, free, offline after)
+
+logging:
+  level: "INFO"
+  file: "logs/friday.log"

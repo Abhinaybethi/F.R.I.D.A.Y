@@ -1,0 +1,16 @@
+{
+  "_comment": "Add your own apps below. Format: 'spoken name': {'windows': '...', 'mac': '...'}. If 'open <name>' doesn't launch an app, replace the value with its full path/exe name.",
+
+  "chrome": { "windows": "chrome", "mac": "Google Chrome" },
+  "google chrome": { "windows": "chrome", "mac": "Google Chrome" },
+  "notepad": { "windows": "notepad", "mac": "TextEdit" },
+  "calculator": { "windows": "calc", "mac": "Calculator" },
+  "word": { "windows": "winword", "mac": "Microsoft Word" },
+  "excel": { "windows": "excel", "mac": "Microsoft Excel" },
+  "powerpoint": { "windows": "powerpnt", "mac": "Microsoft PowerPoint" },
+  "spotify": { "windows": "spotify", "mac": "Spotify" },
+  "vs code": { "windows": "code", "mac": "Visual Studio Code" },
+  "visual studio code": { "windows": "code", "mac": "Visual Studio Code" },
+  "mail": { "windows": "outlook", "mac": "Mail" },
+  "outlook": { "windows": "outlook", "mac": "Microsoft Outlook" }
+}
