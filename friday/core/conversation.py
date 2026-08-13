@@ -20,6 +20,8 @@ from friday.planning.plan_models import ActionPlan, PlanState
 from friday.planning.planner import parse_plan
 from friday.planning.executor import execute_plan_step
 from friday.planning.context_resolver import ShortTermContext, resolve_context
+from friday.reasoning.interface import Reasoner
+from friday.reasoning.local_reasoner import OllamaReasoner
 
 logger = get_logger(__name__)
 
@@ -47,11 +49,12 @@ class ConversationManager:
     Manages state transitions, context, system intents, confirmation, and tool execution.
     """
 
-    def __init__(self, dry_run: bool = True, allow_real_execution: bool = False):
+    def __init__(self, dry_run: bool = True, allow_real_execution: bool = False, reasoner: Optional[Reasoner] = None):
         self.state_machine = StateMachine(ConversationState.IDLE)
         self.context = ConversationContext()
         self.dry_run = dry_run
         self.allow_real_execution = allow_real_execution
+        self.reasoner = reasoner or OllamaReasoner()
 
     @property
     def state(self) -> ConversationState:
@@ -223,23 +226,62 @@ class ConversationManager:
         # Check if multi-step planner is needed
         if " and " in transcript or " then " in transcript:
             plan, err = parse_plan(transcript, st_context)
+            if not err:
+                self.context.current_plan = plan
+                return self._continue_plan()
+                
+            # If deterministic planner fails, fall through to single-step/reasoner
+            # We don't return the err immediately.
+            resolved_text = transcript
+        else:
+            resolved_text, err = resolve_context(transcript, st_context)
             if err:
                 self.state_machine.transition_to(ConversationState.RESPONDING)
                 self.state_machine.transition_to(ConversationState.LISTENING)
                 self.context.last_response = err
                 return err, True
-            self.context.current_plan = plan
-            return self._continue_plan()
-            
-        # Single command path
-        resolved_text, err = resolve_context(transcript, st_context)
-        if err:
-            self.state_machine.transition_to(ConversationState.RESPONDING)
-            self.state_machine.transition_to(ConversationState.LISTENING)
-            self.context.last_response = err
-            return err, True
             
         intent = route(resolved_text)
+        
+        # --- Local Reasoner Fallback ---
+        if intent.action == Action.UNKNOWN and self.reasoner and self.reasoner.is_available():
+            logger.info("[REASONER] Route unknown, falling back to reasoning layer")
+            reasoned = self.reasoner.request(resolved_text, st_context)
+            r_type = reasoned.get("type")
+            
+            if r_type == "plan":
+                plan_steps = []
+                for s in reasoned.get("steps", []):
+                    conf = reasoned.get("confidence", 0.9)
+                    plan_steps.append(Intent(
+                        action=Action[s["action"]],
+                        target=s.get("target", ""),
+                        arguments=s.get("arguments", {}),
+                        intent_confidence=conf,
+                        target_confidence=conf
+                    ))
+                self.context.current_plan = ActionPlan(steps=plan_steps)
+                return self._continue_plan()
+                
+            elif r_type == "intent":
+                conf = reasoned.get("confidence", 0.9)
+                intent = Intent(
+                    action=Action[reasoned["action"]],
+                    target=reasoned.get("target", ""),
+                    arguments=reasoned.get("arguments", {}),
+                    intent_confidence=conf,
+                    target_confidence=conf
+                )
+                
+            elif r_type in ("response", "clarification"):
+                text = reasoned.get("text") or reasoned.get("question") or "I didn't understand that."
+                self.state_machine.transition_to(ConversationState.RESPONDING)
+                self.state_machine.transition_to(ConversationState.LISTENING)
+                self.context.last_response = text
+                return text, True
+                
+        # --- End Reasoner Fallback ---
+
         self.context.last_intent = intent
 
         if intent.action == Action.SYSTEM_HELP:

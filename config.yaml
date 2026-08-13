@@ -46,3 +46,7 @@ logging:
 tools:
   dry_run: true        # set false only when you trust the router and want real execution
   allow_real_execution: false  # real execution requires dry_run: false AND allow_real_execution: true
+
+reasoning:
+  model: "llama3.2:1b"
+  endpoint: "http://localhost:11434/api/generate"
