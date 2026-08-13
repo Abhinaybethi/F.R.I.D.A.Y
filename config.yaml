@@ -42,3 +42,7 @@ brain:
 logging:
   level: "INFO"
   file: "logs/friday.log"
+
+tools:
+  dry_run: true        # set false only when you trust the router and want real execution
+  allow_real_execution: false  # real execution requires dry_run: false AND allow_real_execution: true

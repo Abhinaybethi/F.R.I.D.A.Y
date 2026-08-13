@@ -1,17 +1,15 @@
 """
-Friday - main orchestrator.
+Friday — main orchestrator.
 
-Loads config, wires together voice I/O, the LLM brain, web search, and the
-command router, then runs the listen -> route -> respond loop.
+Pipeline:
+    Wake word → listen_once() → ConversationManager → tool/response
 """
 import yaml
 
 from friday.voice.session_manager import VoiceSessionManager
 from friday.voice.text_to_speech import TextToSpeech
 from friday.core.wake_word import WakeWordListener
-from friday.core.command_router import CommandRouter
-from friday.brain.llm_client import LLMClient
-from friday.brain.web_search import WebSearch
+from friday.core.conversation import ConversationManager
 from friday.utils.logger import get_logger
 
 
@@ -48,42 +46,48 @@ class Friday:
             self.session_manager, wake_word=self.config.get("wake_word", "friday")
         )
 
-        brain_cfg = self.config.get("brain", {})
-        self.llm_client = LLMClient(
-            base_url=brain_cfg.get("ollama_url", "http://localhost:11434"),
-            model=brain_cfg.get("ollama_model", "llama3.2"),
-        )
-        self.web_search = WebSearch()
+        tools_cfg = self.config.get("tools", {})
+        self._dry_run = tools_cfg.get("dry_run", True)
+        self._allow_real_execution = tools_cfg.get("allow_real_execution", False)
 
-        self.router = CommandRouter(self.tts, self.llm_client, self.web_search)
-        self._listening_cfg = listening_cfg
+        self.conversation_manager = ConversationManager(
+            dry_run=self._dry_run,
+            allow_real_execution=self._allow_real_execution,
+        )
+
+    # ------------------------------------------------------------------
+    def _handle(self, transcript: str) -> bool:
+        """
+        Route one transcript through the conversation manager.
+        Returns False when the user asks to stop/exit.
+        """
+        response, keep_running = self.conversation_manager.handle_transcript(transcript)
+        if response:
+            self.tts.speak(response)
+        return keep_running
 
     def run(self):
         self.tts.speak("Friday online. Say my name whenever you need me.")
 
-        if not self.llm_client.is_available():
-            self.logger.warning(
-                "Ollama isn't reachable at startup. Knowledge answers will "
-                "rely on web search only until Ollama is running. See README."
-            )
+        with self.session_manager:
+            self.conversation_manager.start_session()
+            while True:
+                self.wake_word_listener.wait_for_wake_word()
+                self.tts.speak("Yes?")
 
-        # Open the microphone once for the entire session.
-        self.session_manager.start_session()
+                transcript = self.session_manager.listen_once()
 
-        while True:
-            self.wake_word_listener.wait_for_wake_word()
-            self.tts.speak("Yes?")
+                if not transcript:
+                    self.tts.speak("Sorry, I didn't catch that.")
+                    continue
 
-            command = self.session_manager.listen_once()
+                keep_running = self._handle(transcript)
+                if not keep_running:
+                    break
 
-            if not command:
-                self.tts.speak("Sorry, I didn't catch that.")
-                continue
-
-            keep_running = self.router.route(command)
-            if not keep_running:
-                break
+            self.conversation_manager.stop_session()
 
     def shutdown(self):
         self.logger.info("Friday shutting down.")
+        self.conversation_manager.stop_session()
         self.session_manager.stop_session()
