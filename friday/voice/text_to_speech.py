@@ -1,6 +1,8 @@
 import io
 import os
 import wave
+import time
+import re
 import yaml
 import soundfile as sf
 import sounddevice as sd
@@ -11,26 +13,28 @@ logger = get_logger(__name__)
 
 
 class TextToSpeech:
-    def __init__(self, engine="kokoro", fallback_engine="piper", voice="af_heart", speed=1.0, device="auto"):
+    def __init__(self, engine="piper", fallback_engine="kokoro", voice="af_heart", speed=1.0, device="auto"):
         self.engine_name = engine
         self.fallback_engine = fallback_engine
         self.voice = voice
         self.speed = speed
         self.kokoro = None
         self.piper = None
+        self._is_speaking = False
+        self._stop_requested = False
         
         with open("config.yaml", "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         
         tts_cfg = config.get("voice", {}).get("tts", {})
-        self.kokoro_model = tts_cfg.get("kokoro_model", "models/tts/kokoro/kokoro-v0_19.onnx")
-        self.kokoro_voices = tts_cfg.get("kokoro_voices", "models/tts/kokoro/voices.json")
+        self.kokoro_model = tts_cfg.get("kokoro_model", "models/tts/kokoro/kokoro-v1.0.int8.onnx")
+        self.kokoro_voices = tts_cfg.get("kokoro_voices", "models/tts/kokoro/voices-v1.0.bin")
         self.piper_model = tts_cfg.get("piper_model", "models/tts/piper/en_US-lessac-low.onnx")
         self.piper_config = tts_cfg.get("piper_config", "models/tts/piper/en_US-lessac-low.onnx.json")
         
-        if engine == "kokoro":
+        if engine == "kokoro" or fallback_engine == "kokoro":
             self._init_kokoro()
-        if fallback_engine == "piper":
+        if engine == "piper" or fallback_engine == "piper":
             self._init_piper()
 
     def _init_kokoro(self):
@@ -57,35 +61,117 @@ class TextToSpeech:
         except Exception as e:
             logger.error("Failed to load Piper fallback: %s", e)
 
+    def _clean_for_speech(self, text: str) -> str:
+        if not text:
+            return ""
+        
+        # Remove dry-run prefix
+        text = text.replace("[DRY RUN] ", "")
+        
+        # Map tool responses to spoken responses
+        if text.startswith("Would open folder: "):
+            text = text.replace("Would open folder: ", "Opening folder ")
+        elif text.startswith("Would open "):
+            text = text.replace("Would open ", "Opening ")
+        elif text.startswith("Would close "):
+            text = text.replace("Would close ", "Closing ")
+        elif text.startswith("Would search: "):
+            if "?q=" in text:
+                query = text.split("?q=")[-1].replace("+", " ")
+                text = f"Searching for {query}."
+            else:
+                text = "Searching the web."
+                
+        # Remove http/https urls
+        text = re.sub(r"https?://[^\s]+", "the website", text)
+        return text.strip()
+
+    def stop(self):
+        self._stop_requested = True
+        sd.stop()
+        
+    def is_speaking(self):
+        return self._is_speaking
+
     def speak(self, text: str) -> None:
         if not text:
             return
+            
+        clean_text = self._clean_for_speech(text)
+        if not clean_text:
+            return
+            
+        print(f"Friday: {clean_text}")
         
-        print(f"Friday: {text}")
+        self._stop_requested = False
+        self._is_speaking = True
         
-        if self.engine_name == "kokoro" and self.kokoro is not None:
-            try:
-                self._speak_kokoro(text)
-                return
-            except Exception as e:
-                logger.warning("Kokoro TTS failed during synthesis: %s", e)
-        
-        if self.fallback_engine == "piper" and self.piper is not None:
-            try:
-                self._speak_piper(text)
-            except Exception as e:
-                logger.error("Piper TTS fallback failed during synthesis: %s", e)
+        try:
+            if self.engine_name == "kokoro" and self.kokoro is not None:
+                try:
+                    self._speak_kokoro(clean_text)
+                    return
+                except Exception as e:
+                    logger.warning("Kokoro TTS failed during synthesis: %s", e)
+            elif self.engine_name == "piper" and self.piper is not None:
+                try:
+                    self._speak_piper(clean_text)
+                    return
+                except Exception as e:
+                    import traceback
+                    logger.warning("Piper TTS failed during synthesis: %s\n%s", e, traceback.format_exc())
+            
+            # Fallbacks
+            if self.fallback_engine == "kokoro" and self.kokoro is not None:
+                try:
+                    self._speak_kokoro(clean_text)
+                    return
+                except Exception as e:
+                    logger.error("Kokoro fallback failed: %s", e)
+            elif self.fallback_engine == "piper" and self.piper is not None:
+                try:
+                    self._speak_piper(clean_text)
+                    return
+                except Exception as e:
+                    logger.error("Piper fallback failed: %s", e)
+        finally:
+            self._is_speaking = False
+
+    def _play_interruptible(self, data, fs):
+        duration = len(data) / fs
+        sd.play(data, fs)
+        start_time = time.time()
+        while time.time() - start_time < duration and not self._stop_requested:
+            sd.sleep(50)
+            
+        if self._stop_requested:
+            sd.stop()
+        else:
+            sd.wait()
 
     def _speak_kokoro(self, text: str):
+        t0 = time.time()
         samples, sample_rate = self.kokoro.create(text, voice=self.voice, speed=self.speed, lang="en-us")
-        sd.play(samples, sample_rate)
-        sd.wait()
+        t1 = time.time()
+        duration = len(samples) / sample_rate
+        rtf = (t1 - t0) / duration if duration > 0 else 0
+        logger.info("[TTS] Kokoro synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+        
+        self._play_interruptible(samples, sample_rate)
 
     def _speak_piper(self, text: str):
+        t0 = time.time()
         wav_io = io.BytesIO()
         with wave.open(wav_io, "wb") as wav_file:
-            self.piper.synthesize(text, wav_file)
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.piper.config.sample_rate)
+            self.piper.synthesize_wav(text, wav_file)
         wav_io.seek(0)
         data, fs = sf.read(wav_io)
-        sd.play(data, fs)
-        sd.wait()
+        t1 = time.time()
+        duration = len(data) / fs
+        rtf = (t1 - t0) / duration if duration > 0 else 0
+        logger.info("[TTS] Piper synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+        
+        self._play_interruptible(data, fs)

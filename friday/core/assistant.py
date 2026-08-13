@@ -89,5 +89,6 @@ class Friday:
 
     def shutdown(self):
         self.logger.info("Friday shutting down.")
+        self.tts.stop()
         self.conversation_manager.stop_session()
         self.session_manager.stop_session()

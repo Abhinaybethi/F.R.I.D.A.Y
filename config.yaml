@@ -20,8 +20,8 @@ voice:
     compute_type: "int8"
     language: "en"
   tts:
-    engine: "kokoro"
-    fallback_engine: "piper"
+    engine: "piper"
+    fallback_engine: "kokoro"
     kokoro_model: "models/tts/kokoro/kokoro-v1.0.int8.onnx"
     kokoro_voices: "models/tts/kokoro/voices-v1.0.bin"
     piper_model: "models/tts/piper/en_US-lessac-low.onnx"
