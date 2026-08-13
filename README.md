@@ -201,7 +201,7 @@ unless the new command needs a genuinely new capability.
 
 ---
 
-## Troubleshooting
+## Troubleshooting..
 
 - **"No module named pyaudio"** → see the pyaudio install notes above.
 - **Friday doesn't hear anything** → check OS microphone permissions, and
