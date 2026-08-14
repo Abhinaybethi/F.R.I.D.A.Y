@@ -16,7 +16,7 @@ from friday.utils.logger import get_logger
 logger = get_logger(__name__)
 
 class OllamaReasoner(Reasoner):
-    def __init__(self, endpoint: str = "http://localhost:11434/api/generate", model: str = "llama3.2:1b"):
+    def __init__(self, endpoint: str = "http://localhost:11434/api/generate", model: str = "llama3:latest"):
         self.endpoint = endpoint
         self.model = model
         
@@ -69,7 +69,7 @@ class OllamaReasoner(Reasoner):
                 headers={'Content-Type': 'application/json'},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=10.0) as response:
+            with urllib.request.urlopen(req, timeout=60.0) as response:
                 if response.status == 200:
                     result = json.loads(response.read().decode('utf-8'))
                     raw_output = result.get("response", "")

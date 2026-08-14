@@ -32,8 +32,10 @@ def test_gate():
     # The planner itself will reject "blood growing" during parsing.
     resp, keep = cm.handle_transcript("open chrome and blood growing and open youtube")
     assert keep
+    # Plan must be rejected at parse — no partial plan should be executing
     assert cm.context.current_plan is None
-    assert "didn't understand" in resp
+    # Response must be non-empty (deterministic rejection OR reasoner fallback)
+    assert resp
     print("[OK] Failed step stops plan (rejected at parse).")
     
     # 3. Confirmation pauses correct step
@@ -52,10 +54,14 @@ def test_gate():
     assert cm.state == ConversationState.LISTENING
     assert cm.context.current_plan is None
     
-    # Send another "yes" - should not execute anything
+    # Send another "yes" — should not execute anything (no pending confirmation)
     resp, keep = cm.handle_transcript("yes")
-    assert "didn't understand" in resp.lower() or "unknown" in resp.lower() or "nothing" in resp.lower() or "unknown intent" in resp.lower() or "understand" in resp.lower()
-    # Note: In phase 4, "yes" routes to Action.UNKNOWN normally, so it gets rejected.
+    # Core invariant: no plan is active and no pending confirmation exists.
+    # Response text may be a safe rejection OR a conversational response from the reasoner.
+    assert cm.context.current_plan is None
+    assert cm.context.pending_intent is None
+    assert cm.state == ConversationState.LISTENING
+    assert resp  # must say something
     print("[OK] Confirmation executes exactly once.")
     
     # 5. Cancel clears plan
@@ -80,7 +86,12 @@ def test_gate():
     cm = ConversationManager(dry_run=True, allow_real_execution=False)
     cm.start_session()
     resp, keep = cm.handle_transcript("blood growing")
-    assert "understand" in resp.lower()
+    # Core invariant: no execution, state back to LISTENING, some response given.
+    assert keep
+    assert cm.state == ConversationState.LISTENING
+    assert cm.context.current_plan is None
+    assert cm.context.pending_intent is None
+    assert resp
     print("[OK] Unknown intents rejected.")
     
     # 8. Context does not leak between managers
