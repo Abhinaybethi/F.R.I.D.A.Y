@@ -44,8 +44,20 @@ logging:
   file: "logs/friday.log"
 
 tools:
-  dry_run: true        # set false only when you trust the router and want real execution
-  allow_real_execution: false  # real execution requires dry_run: false AND allow_real_execution: true
+  dry_run: true        # Gate 1: set false only when you trust the router and want real execution
+  allow_real_execution: false  # Gate 2: real execution requires dry_run: false AND allow_real_execution: true
+
+  # Gate 3: per-action opt-in (all three gates must pass for real execution)
+  # Setting any of these to false denies that action category entirely.
+  permissions:
+    open_app: true
+    close_app: true
+    open_folder: true
+    open_website: true
+    search_web: true
+    get_time: true
+    find_file: true
+    open_file: true
 
 reasoning:
   model: "llama3:latest"

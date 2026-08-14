@@ -15,7 +15,8 @@ def execute_plan_step(
     plan: ActionPlan, 
     dry_run: bool = True, 
     allow_real_execution: bool = False,
-    is_confirmed: bool = False
+    is_confirmed: bool = False,
+    permissions: Optional[dict] = None,
 ) -> tuple[str, bool, bool, dict]:
     """
     Executes the current step of the plan.
@@ -50,11 +51,27 @@ def execute_plan_step(
         
     # Policy.SAFE
     plan.state = PlanState.EXECUTING
-    result = registry.execute(step_intent, dry_run=dry_run, allow_real_execution=allow_real_execution)
+    result = registry.execute(
+        step_intent,
+        dry_run=dry_run,
+        allow_real_execution=allow_real_execution,
+        permissions=permissions,
+    )
     
-    logger.info("[PLAN] Step %d result: success", plan.current_step_index + 1)
-    
+    # Check execution and verification success
+    if hasattr(result, "is_success"):
+        step_success = result.is_success
+    else:
+        step_success = result.get("success", False)
+
     response = result.get("message", "Done.")
+
+    if not step_success:
+        plan.state = PlanState.FAILED
+        logger.warning("[PLAN] Step %d failed execution or verification.", plan.current_step_index + 1)
+        return response, False, True, result
+
+    logger.info("[PLAN] Step %d result: success", plan.current_step_index + 1)
     plan.current_step_index += 1
     
     if plan.current_step_index >= len(plan.steps):

@@ -19,6 +19,7 @@ from friday.utils.logger import get_logger
 from friday.planning.plan_models import ActionPlan, PlanState
 from friday.planning.planner import parse_plan
 from friday.planning.executor import execute_plan_step
+from friday.planning.plan_validator import validate_plan
 from friday.planning.context_resolver import ShortTermContext, resolve_context
 from friday.reasoning.interface import Reasoner
 from friday.reasoning.local_reasoner import OllamaReasoner
@@ -49,12 +50,20 @@ class ConversationManager:
     Manages state transitions, context, system intents, confirmation, and tool execution.
     """
 
-    def __init__(self, dry_run: bool = True, allow_real_execution: bool = False, reasoner: Optional[Reasoner] = None):
+    def __init__(
+        self,
+        dry_run: bool = True,
+        allow_real_execution: bool = False,
+        reasoner: Optional[Reasoner] = None,
+        permissions: Optional[dict] = None,
+    ):
         self.state_machine = StateMachine(ConversationState.IDLE)
         self.context = ConversationContext()
         self.dry_run = dry_run
         self.allow_real_execution = allow_real_execution
         self.reasoner = reasoner or OllamaReasoner()
+        # None means "use registry defaults" (all enabled) — backward compatible
+        self.permissions = permissions
 
     @property
     def state(self) -> ConversationState:
@@ -96,7 +105,8 @@ class ConversationManager:
                 
             is_confirmed = is_resume and first_step
             response, requires_conf, is_completed, tool_result = execute_plan_step(
-                plan, self.dry_run, self.allow_real_execution, is_confirmed=is_confirmed
+                plan, self.dry_run, self.allow_real_execution,
+                is_confirmed=is_confirmed, permissions=self.permissions
             )
             first_step = False
             
@@ -183,6 +193,7 @@ class ConversationManager:
                     pending,
                     dry_run=self.dry_run,
                     allow_real_execution=self.allow_real_execution,
+                    permissions=self.permissions,
                 )
                 response = result.get("message", "Done.")
                 
@@ -227,6 +238,21 @@ class ConversationManager:
         if " and " in transcript or " then " in transcript:
             plan, err = parse_plan(transcript, st_context)
             if not err:
+                # Phase 8: validate the ENTIRE plan before any step executes
+                perms = self.permissions if self.permissions is not None else {}
+                # Use a fully-enabled default if no permissions were configured
+                _DEFAULT_PERMS = {
+                    "open_app": True, "close_app": True, "open_folder": True,
+                    "open_website": True, "search_web": True, "get_time": True,
+                    "find_file": True, "open_file": True,
+                }
+                effective_perms = perms if perms else _DEFAULT_PERMS
+                plan_ok, plan_reason = validate_plan(plan, effective_perms)
+                if not plan_ok:
+                    self.state_machine.transition_to(ConversationState.RESPONDING)
+                    self.state_machine.transition_to(ConversationState.LISTENING)
+                    self.context.last_response = plan_reason
+                    return plan_reason, True
                 self.context.current_plan = plan
                 return self._continue_plan()
                 
@@ -260,7 +286,21 @@ class ConversationManager:
                         intent_confidence=conf,
                         target_confidence=conf
                     ))
-                self.context.current_plan = ActionPlan(steps=plan_steps)
+                reasoner_plan = ActionPlan(steps=plan_steps)
+                # Phase 8: validate the reasoner-generated plan before any step executes
+                _DEFAULT_PERMS = {
+                    "open_app": True, "close_app": True, "open_folder": True,
+                    "open_website": True, "search_web": True, "get_time": True,
+                    "find_file": True, "open_file": True,
+                }
+                effective_perms = self.permissions if self.permissions else _DEFAULT_PERMS
+                plan_ok, plan_reason = validate_plan(reasoner_plan, effective_perms)
+                if not plan_ok:
+                    self.state_machine.transition_to(ConversationState.RESPONDING)
+                    self.state_machine.transition_to(ConversationState.LISTENING)
+                    self.context.last_response = plan_reason
+                    return plan_reason, True
+                self.context.current_plan = reasoner_plan
                 return self._continue_plan()
                 
             elif r_type == "intent":
