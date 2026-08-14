@@ -28,23 +28,30 @@ from friday.verification.verifier import verify_execution
 from friday.verification.formatter import format_outcome
 
 
+_RELEASE_TEST_WHITELIST: set[tuple[Action, str]] = {
+    (Action.OPEN_APP, "chrome"),
+    (Action.OPEN_WEBSITE, "youtube"),
+    (Action.OPEN_FOLDER, "downloads"),
+}
+
+
 def execute(
     intent: Intent,
     dry_run: bool = True,
     allow_real_execution: bool = False,
     permissions: dict | None = None,
+    release_test_mode: bool = False,
 ) -> ActionOutcome:
     """
     Execute the tool for the given intent, perform verification, and return ActionOutcome.
 
     Real execution requires ALL THREE gates:
-      Gate 1: dry_run == False
-      Gate 2: allow_real_execution == True
-      Gate 3: permissions[action] == True  AND  permission policy != DENIED
+      Gate 1: dry_run == False (or release_test_mode with whitelisted target)
+      Gate 2: allow_real_execution == True (or release_test_mode with whitelisted target)
+      Gate 3: permissions[action] == True AND permission policy != DENIED
 
     Returns:
         ActionOutcome containing intent, execution, verification, final_status, and user_message.
-        Also acts as a dict for backward compatibility (outcome["success"], outcome["message"]).
     """
     # Resolve permission config — None means "all enabled" for backward compat
     perms = permissions if permissions is not None else _DEFAULT_PERMISSIONS
@@ -88,13 +95,19 @@ def execute(
         )
         return outcome
 
-    # Gates 1 & 2: dry-run / real-execution switch
-    is_dry_run = dry_run or (not allow_real_execution)
+    # Determine dry-run mode vs real execution
     a = intent.action
-    t = intent.target
+    t = intent.target.lower().strip()
+
+    if release_test_mode:
+        # RELEASE_TEST_MODE permits real execution ONLY for harmless target whitelist
+        is_whitelisted = (a, t) in _RELEASE_TEST_WHITELIST
+        is_dry_run = not is_whitelisted
+    else:
+        is_dry_run = dry_run or (not allow_real_execution)
 
     confirmation = "CONFIRMED" if perm_result == PermissionResult.CONFIRM_REQUIRED else "N/A"
-    execution_mode = "DRY_RUN" if is_dry_run else "REAL"
+    execution_mode = "RELEASE_TEST_REAL" if (release_test_mode and not is_dry_run) else ("DRY_RUN" if is_dry_run else "REAL")
 
     # Tool Execution
     t_exec_0 = time.perf_counter()

@@ -167,6 +167,8 @@ class ConversationManager:
                 self.context.current_plan.state = PlanState.CANCELLED
                 self.context.current_plan = None
                 
+            if self.state == ConversationState.LISTENING:
+                self.state_machine.transition_to(ConversationState.PROCESSING)
             self.state_machine.transition_to(ConversationState.RESPONDING)
             self.state_machine.transition_to(ConversationState.LISTENING)
             self.context.last_response = "Cancelled."

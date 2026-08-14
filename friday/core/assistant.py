@@ -13,10 +13,18 @@ from friday.core.conversation import ConversationManager
 from friday.utils.logger import get_logger
 
 
+from friday.utils.config_validator import validate_config
+
+
 class Friday:
     def __init__(self, config_path: str = "config.yaml"):
-        with open(config_path, "r", encoding="utf-8") as f:
-            self.config = yaml.safe_load(f)
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw_config = yaml.safe_load(f) or {}
+        except Exception as e:
+            raw_config = {}
+
+        _, self.config, warnings = validate_config(raw_config)
 
         log_cfg = self.config.get("logging", {})
         self.logger = get_logger(
@@ -24,6 +32,8 @@ class Friday:
             log_file=log_cfg.get("file", "logs/friday.log"),
             level=log_cfg.get("level", "INFO"),
         )
+        for w in warnings:
+            self.logger.warning("[STARTUP] Config warning: %s", w)
 
         voice_cfg = self.config.get("voice", {})
         tts_cfg = voice_cfg.get("tts", {})
@@ -49,10 +59,12 @@ class Friday:
         tools_cfg = self.config.get("tools", {})
         self._dry_run = tools_cfg.get("dry_run", True)
         self._allow_real_execution = tools_cfg.get("allow_real_execution", False)
+        self._permissions = tools_cfg.get("permissions", {})
 
         self.conversation_manager = ConversationManager(
             dry_run=self._dry_run,
             allow_real_execution=self._allow_real_execution,
+            permissions=self._permissions,
         )
 
     # ------------------------------------------------------------------
