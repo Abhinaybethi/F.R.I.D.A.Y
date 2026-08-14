@@ -117,6 +117,7 @@ def execute(
     exec_success = raw_result.get("success", False)
     exec_status = ExecutionStatus.SUCCESS if exec_success else ExecutionStatus.FAILED
     exec_msg = raw_result.get("message", "Done." if exec_success else "Execution failed.")
+    exec_spoken = raw_result.get("spoken_message", "")
 
     exec_res = ExecutionResult(
         action=a,
@@ -126,13 +127,14 @@ def execute(
         blocked=raw_result.get("blocked", False),
         raw_tool_result=raw_result,
         execution_latency_ms=exec_latency,
+        spoken_message=exec_spoken,
     )
 
     # Verification
     ver_res = verify_execution(intent, exec_res, is_dry_run=is_dry_run)
 
     # Formatter & Final Status
-    final_status, user_msg = format_outcome(intent, exec_res, ver_res, is_dry_run)
+    final_status, user_msg, spoken_msg = format_outcome(intent, exec_res, ver_res, is_dry_run)
 
     outcome = ActionOutcome(
         intent=intent,
@@ -140,6 +142,7 @@ def execute(
         verification=ver_res,
         final_status=final_status,
         user_message=user_msg,
+        spoken_message=spoken_msg,
     )
 
     total_latency = (time.perf_counter() - t0) * 1000

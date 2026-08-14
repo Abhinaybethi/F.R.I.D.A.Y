@@ -56,16 +56,20 @@ def test_gate2_canonical_entrypoint():
 # Gate 3 — CLI diagnostics
 def test_gate3_cli_diagnostics():
     from main import run_diagnostics
-    ok = run_diagnostics()
-    assert ok is True
+    from unittest.mock import patch
+    with patch("friday.reasoning.local_reasoner.OllamaReasoner.is_available", return_value=True):
+        ok = run_diagnostics()
+        assert ok is True
     print("[OK] Gate 3: CLI diagnostics command verified")
 
 
 # Gate 4 — JSON diagnostics output
 def test_gate4_json_diagnostics():
     from main import run_diagnostics
-    ok = run_diagnostics(as_json=True)
-    assert ok is True
+    from unittest.mock import patch
+    with patch("friday.reasoning.local_reasoner.OllamaReasoner.is_available", return_value=True):
+        ok = run_diagnostics(as_json=True)
+        assert ok is True
     print("[OK] Gate 4: Machine-readable JSON diagnostics verified")
 
 

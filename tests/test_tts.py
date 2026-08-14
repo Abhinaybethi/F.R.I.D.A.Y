@@ -11,10 +11,7 @@ def test_tts_pipeline():
     tts = TextToSpeech(engine="piper")
     
     print("\n1. Testing Text Cleaning")
-    assert tts._clean_for_speech("[DRY RUN] Would open Chrome.") == "Opening Chrome."
-    assert tts._clean_for_speech("[DRY RUN] Would close Chrome.") == "Closing Chrome."
-    assert tts._clean_for_speech("[DRY RUN] Would search: https://www.google.com/search?q=python+tutorials") == "Searching for python tutorials."
-    assert tts._clean_for_speech("[DRY RUN] Would open folder: C:\\Users\\abhin\\Downloads") == "Opening folder C:\\Users\\abhin\\Downloads"
+    assert tts._clean_for_speech("Normal text.") == "Normal text."
     print("Text cleaning OK.")
     
     print("\n2. Testing Short Speech")

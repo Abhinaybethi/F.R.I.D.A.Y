@@ -6,6 +6,7 @@ system command handling, and tool execution dispatch.
 """
 from dataclasses import dataclass
 from typing import Optional
+import time
 
 from friday.core.state import ConversationState, StateMachine
 from friday.intent.models import Action, Intent
@@ -39,7 +40,8 @@ class ConversationContext:
     last_intent: Optional[Intent] = None
     last_response: str = ""
     pending_intent: Optional[Intent] = None
-    
+    confirmation_start_time: float = 0.0
+
     # Phase 6
     current_plan: Optional[ActionPlan] = None
     last_search_query: str = ""
@@ -79,7 +81,7 @@ class ConversationManager:
         """Transition to STOPPING then IDLE."""
         self.state_machine.transition_to(ConversationState.STOPPING)
         self.state_machine.transition_to(ConversationState.IDLE)
-        
+
     def _get_short_term_context(self) -> ShortTermContext:
         action = self.context.last_intent.action if self.context.last_intent else None
         target = self.context.last_intent.target if self.context.last_intent else ""
@@ -93,50 +95,51 @@ class ConversationManager:
             last_transcript=self.context.last_transcript,
             last_response=self.context.last_response
         )
-        
+
     def _continue_plan(self, is_resume: bool = False) -> tuple[str, bool]:
         """Runs the execution loop for the current plan."""
         plan = self.context.current_plan
         responses = []
         first_step = True
-        
+
         while plan.state in (PlanState.READY, PlanState.EXECUTING):
             if self.state_machine.current_state != ConversationState.EXECUTING:
                 self.state_machine.transition_to(ConversationState.EXECUTING)
-            
+
             if plan.current_step_index < len(plan.steps):
                 step_intent = plan.steps[plan.current_step_index]
                 self.context.last_intent = step_intent
-                
+
             is_confirmed = is_resume and first_step
             response, requires_conf, is_completed, tool_result = execute_plan_step(
                 plan, self.dry_run, self.allow_real_execution,
                 is_confirmed=is_confirmed, permissions=self.permissions
             )
             first_step = False
-            
+
             if response:
                 responses.append(response)
-                
+
             if tool_result:
                 self.context.last_tool_result = tool_result
                 if step_intent.action == Action.SEARCH_WEB:
                     self.context.last_search_query = step_intent.target
-                    
+
             if requires_conf:
                 self.state_machine.transition_to(ConversationState.WAITING_FOR_CONFIRMATION)
+                self.context.confirmation_start_time = time.time()
                 self.context.last_response = " ".join(responses)
                 return self.context.last_response, True
-                
+
             if is_completed:
                 break
-                
+
         # Plan completed or failed
         if plan.state in (PlanState.COMPLETED, PlanState.FAILED, PlanState.CANCELLED):
             self.context.current_plan = None
-            
+
         final_response = " ".join(responses) if responses else "Done."
-        
+
         self.state_machine.transition_to(ConversationState.RESPONDING)
         self.state_machine.transition_to(ConversationState.LISTENING)
         self.context.last_response = final_response
@@ -155,7 +158,7 @@ class ConversationManager:
 
         self.context.last_transcript = transcript
         norm_trans = normalize(transcript)
-        
+
         # Priority 1 & 2: Global System Commands (Stop & Cancel)
         if norm_trans in ("stop", "shut down", "exit", "quit", "goodbye"):
             self.context.pending_intent = None
@@ -171,7 +174,7 @@ class ConversationManager:
             if self.context.current_plan:
                 self.context.current_plan.state = PlanState.CANCELLED
                 self.context.current_plan = None
-                
+
             if self.state == ConversationState.LISTENING:
                 self.state_machine.transition_to(ConversationState.PROCESSING)
             self.state_machine.transition_to(ConversationState.RESPONDING)
@@ -183,56 +186,63 @@ class ConversationManager:
         # State: WAITING_FOR_CONFIRMATION
         # ------------------------------------------------------------------
         if self.state == ConversationState.WAITING_FOR_CONFIRMATION:
-            confirmed = parse_confirmation_response(transcript)
-
-            if confirmed is True:
-                # If we have an active plan, resume it.
-                if self.context.current_plan and self.context.current_plan.state == PlanState.WAITING_FOR_CONFIRMATION:
-                    self.context.current_plan.state = PlanState.EXECUTING
-                    return self._continue_plan(is_resume=True)
-                    
-                # Otherwise, it's a single intent confirmation
-                pending = self.context.pending_intent
-                self.context.pending_intent = None
-                self.state_machine.transition_to(ConversationState.EXECUTING)
-
-                result = registry.execute(
-                    pending,
-                    dry_run=self.dry_run,
-                    allow_real_execution=self.allow_real_execution,
-                    permissions=self.permissions,
-                )
-                response = result.get("message", "Done.")
-                
-                if result:
-                    self.context.last_tool_result = result
-                    if pending.action == Action.SEARCH_WEB:
-                        self.context.last_search_query = pending.target
-
-                self.state_machine.transition_to(ConversationState.RESPONDING)
-                self.state_machine.transition_to(ConversationState.LISTENING)
-                self.context.last_response = response
-                return response, True
-
-            elif confirmed is False:
+            if time.time() - self.context.confirmation_start_time > 30.0:
+                logger.info("Confirmation timeout expired. Resetting state.")
                 self.context.pending_intent = None
                 if self.context.current_plan:
                     self.context.current_plan.state = PlanState.CANCELLED
                     self.context.current_plan = None
-                self.state_machine.transition_to(ConversationState.RESPONDING)
                 self.state_machine.transition_to(ConversationState.LISTENING)
-                self.context.last_response = "Cancelled."
-                return "Cancelled.", True
+                # Fall through to treat the current transcript as a new command
+            else:
+                confirmed = parse_confirmation_response(transcript)
 
-            routed = route(transcript)
-            if routed.action != Action.UNKNOWN:
-                response = "You have a pending confirmation. Say yes, no, or cancel."
+                if confirmed is True:
+                    # If we have an active plan, resume it.
+                    if self.context.current_plan and self.context.current_plan.state == PlanState.WAITING_FOR_CONFIRMATION:
+                        self.context.current_plan.state = PlanState.EXECUTING
+                        return self._continue_plan(is_resume=True)
+
+                    # Otherwise, it's a single intent confirmation
+                    pending = self.context.pending_intent
+                    self.context.pending_intent = None
+                    self.state_machine.transition_to(ConversationState.EXECUTING)
+
+                    result = registry.execute(
+                        pending,
+                        dry_run=self.dry_run,
+                        allow_real_execution=self.allow_real_execution,
+                        permissions=self.permissions,
+                    )
+                    if result:
+                        self.context.last_tool_result = result
+                        if pending.action == Action.SEARCH_WEB:
+                            self.context.last_search_query = pending.target
+
+                    self.state_machine.transition_to(ConversationState.RESPONDING)
+                    self.state_machine.transition_to(ConversationState.LISTENING)
+                    self.context.last_response = result.get("spoken_message") or result.get("message", "Done.")
+                    return self.context.last_response, True
+
+                elif confirmed is False:
+                    self.context.pending_intent = None
+                    if self.context.current_plan:
+                        self.context.current_plan.state = PlanState.CANCELLED
+                        self.context.current_plan = None
+                    self.state_machine.transition_to(ConversationState.RESPONDING)
+                    self.state_machine.transition_to(ConversationState.LISTENING)
+                    self.context.last_response = "Cancelled."
+                    return "Cancelled.", True
+
+                routed = route(transcript)
+                if routed.action != Action.UNKNOWN:
+                    response = "You have a pending confirmation. Say yes, no, or cancel."
+                    self.context.last_response = response
+                    return response, True
+
+                response = "Please say yes, no, or cancel."
                 self.context.last_response = response
                 return response, True
-
-            response = "Please say yes, no, or cancel."
-            self.context.last_response = response
-            return response, True
 
 
         # ------------------------------------------------------------------
@@ -240,7 +250,7 @@ class ConversationManager:
         # ------------------------------------------------------------------
         self.state_machine.transition_to(ConversationState.PROCESSING)
         st_context = self._get_short_term_context()
-        
+
         # Check if multi-step planner is needed
         if " and " in transcript or " then " in transcript:
             plan, err = parse_plan(transcript, st_context)
@@ -262,7 +272,7 @@ class ConversationManager:
                     return plan_reason, True
                 self.context.current_plan = plan
                 return self._continue_plan()
-                
+
             # If deterministic planner fails, fall through to single-step/reasoner
             # We don't return the err immediately.
             resolved_text = transcript
@@ -275,7 +285,7 @@ class ConversationManager:
                 return err, True
 
         intent = route(resolved_text)
-        
+
         # --- Local Reasoner Fallback Gate ---
         call_reasoner, gating_reason = should_call_reasoner(
             resolved_text,
@@ -295,7 +305,7 @@ class ConversationManager:
                 return err_msg, True
 
             r_type = reasoned.get("type")
-            
+
             if r_type == "plan":
                 plan_steps = []
                 for s in reasoned.get("steps", []):
@@ -323,7 +333,7 @@ class ConversationManager:
                     return plan_reason, True
                 self.context.current_plan = reasoner_plan
                 return self._continue_plan()
-                
+
             elif r_type == "intent":
                 conf = reasoned.get("confidence", 0.9)
                 intent = Intent(
@@ -333,14 +343,14 @@ class ConversationManager:
                     intent_confidence=conf,
                     target_confidence=conf
                 )
-                
+
             elif r_type in ("response", "clarification"):
                 text = reasoned.get("text") or reasoned.get("question") or "I didn't understand that."
                 self.state_machine.transition_to(ConversationState.RESPONDING)
                 self.state_machine.transition_to(ConversationState.LISTENING)
                 self.context.last_response = text
                 return text, True
-                
+
         # --- End Reasoner Fallback ---
 
         self.context.last_intent = intent
@@ -370,6 +380,7 @@ class ConversationManager:
         if policy == Policy.CONFIRM:
             self.state_machine.transition_to(ConversationState.WAITING_FOR_CONFIRMATION)
             self.context.pending_intent = intent
+            self.context.confirmation_start_time = time.time()
             prompt = format_confirmation_prompt(intent)
             self.context.last_response = prompt
             return prompt, True
@@ -381,13 +392,13 @@ class ConversationManager:
             dry_run=self.dry_run,
             allow_real_execution=self.allow_real_execution,
         )
-        
+
         if result:
             self.context.last_tool_result = result
             if intent.action == Action.SEARCH_WEB:
                 self.context.last_search_query = intent.target
-                
-        response = result.get("message", "Done.")
+
+        response = result.get("spoken_message") or result.get("message", "Done.")
 
         self.state_machine.transition_to(ConversationState.RESPONDING)
         self.state_machine.transition_to(ConversationState.LISTENING)

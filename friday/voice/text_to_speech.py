@@ -65,22 +65,8 @@ class TextToSpeech:
         if not text:
             return ""
         
-        # Remove dry-run prefix
+        # Remove dry-run prefix just in case some string bypasses the structured message
         text = text.replace("[DRY RUN] ", "")
-        
-        # Map tool responses to spoken responses
-        if text.startswith("Would open folder: "):
-            text = text.replace("Would open folder: ", "Opening folder ")
-        elif text.startswith("Would open "):
-            text = text.replace("Would open ", "Opening ")
-        elif text.startswith("Would close "):
-            text = text.replace("Would close ", "Closing ")
-        elif text.startswith("Would search: "):
-            if "?q=" in text:
-                query = text.split("?q=")[-1].replace("+", " ")
-                text = f"Searching for {query}."
-            else:
-                text = "Searching the web."
                 
         # Remove http/https urls
         text = re.sub(r"https?://[^\s]+", "the website", text)

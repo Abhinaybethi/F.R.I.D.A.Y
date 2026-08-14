@@ -19,8 +19,8 @@ def _is_release_test_mode() -> bool:
 def minimize_app(target: str, dry_run: bool = True) -> Dict[str, Any]:
     """Minimize specified application window."""
     target_clean = target.strip()
-    if dry_run and not _is_release_test_mode():
-        return {"success": True, "message": f"[DRY RUN] Would minimize window: {target_clean}"}
+    if dry_run:
+        return {"success": True, "message": f"[DRY RUN] Would minimize window: {target_clean}", "spoken_message": "Minimizing window."}
 
     # Native Windows Execution via ctypes
     if sys.platform == "win32":
@@ -40,8 +40,8 @@ def minimize_app(target: str, dry_run: bool = True) -> Dict[str, Any]:
 def maximize_app(target: str, dry_run: bool = True) -> Dict[str, Any]:
     """Maximize specified application window."""
     target_clean = target.strip()
-    if dry_run and not _is_release_test_mode():
-        return {"success": True, "message": f"[DRY RUN] Would maximize window: {target_clean}"}
+    if dry_run:
+        return {"success": True, "message": f"[DRY RUN] Would maximize window: {target_clean}", "spoken_message": "Maximizing window."}
 
     # Native Windows Execution via ctypes
     if sys.platform == "win32":
@@ -60,6 +60,6 @@ def maximize_app(target: str, dry_run: bool = True) -> Dict[str, Any]:
 
 def take_screenshot(target: str = "", dry_run: bool = True) -> Dict[str, Any]:
     """Take desktop screenshot."""
-    if dry_run and not _is_release_test_mode():
-        return {"success": True, "message": "[DRY RUN] Would take desktop screenshot."}
+    if dry_run:
+        return {"success": True, "message": "[DRY RUN] Would take desktop screenshot.", "spoken_message": "Taking screenshot."}
     return {"success": True, "message": "Captured desktop screenshot."}

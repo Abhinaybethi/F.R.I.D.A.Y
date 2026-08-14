@@ -108,10 +108,17 @@ class Friday:
 
                 self.wake_word_listener.wait_for_wake_word()
 
+                import uuid
+                from friday.utils.logger import request_id_var
+                req_id = uuid.uuid4().hex[:8]
+                request_id_var.set(req_id)
+                self.logger.info("New request started.")
+
                 transcript = self.session_manager.listen_once()
 
                 # Debounce background noise / empty STT fragments
                 if not transcript or len(transcript.strip()) < 2:
+                    self.logger.info("Ignoring empty transcript.")
                     continue
 
                 keep_running = self._handle(transcript)

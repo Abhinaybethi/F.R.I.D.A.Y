@@ -13,4 +13,5 @@ def get_time() -> dict:
         "success": True,
         "time":    now.strftime("%H:%M:%S"),
         "message": f"It's {readable}.",
+        "spoken_message": f"It's {readable}.",
     }

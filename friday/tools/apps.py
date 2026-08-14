@@ -89,7 +89,7 @@ def open_app(name: str, dry_run: bool = True) -> dict:
     display = _DISPLAY_NAMES.get(name, name.title())
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would open {display}."}
+        return {"success": True, "message": f"[DRY RUN] Would open {display}.", "spoken_message": f"Opening {display}."}
 
     exe = _find_executable(name)
     if not exe:
@@ -98,10 +98,10 @@ def open_app(name: str, dry_run: bool = True) -> dict:
     try:
         subprocess.Popen([exe], close_fds=True)
         logger.info("Opened %s (%s)", display, exe)
-        return {"success": True, "message": f"Opening {display}."}
+        return {"success": True, "message": f"Opening {display}.", "spoken_message": f"Opening {display}."}
     except Exception as e:
         logger.error("Failed to open %s: %s", display, e)
-        return {"success": False, "message": f"Failed to open {display}: {e}"}
+        return {"success": False, "message": f"Failed to open {display}: {e}", "spoken_message": f"I couldn't open {display}."}
 
 
 def close_app(name: str, dry_run: bool = True) -> dict:
@@ -118,7 +118,7 @@ def close_app(name: str, dry_run: bool = True) -> dict:
     display = _DISPLAY_NAMES.get(name, name.title())
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would close {display}."}
+        return {"success": True, "message": f"[DRY RUN] Would close {display}.", "spoken_message": f"Closing {display}."}
 
     try:
         import psutil
@@ -137,5 +137,5 @@ def close_app(name: str, dry_run: bool = True) -> dict:
 
     if closed:
         logger.info("Closed %s (%s)", display, closed)
-        return {"success": True, "message": f"Closed {display}."}
-    return {"success": False, "message": f"{display} does not appear to be running."}
+        return {"success": True, "message": f"Closed {display}.", "spoken_message": f"Closed {display}."}
+    return {"success": False, "message": f"{display} does not appear to be running.", "spoken_message": f"{display} doesn't seem to be running."}

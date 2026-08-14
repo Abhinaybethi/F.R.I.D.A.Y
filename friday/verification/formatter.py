@@ -19,30 +19,30 @@ def format_outcome(
     exec_res: ExecutionResult,
     ver_res: VerificationResult,
     is_dry_run: bool,
-) -> tuple[FinalStatus, str]:
+) -> tuple[FinalStatus, str, str]:
     """
     Compute FinalStatus and render human-readable user message.
 
     Returns:
-        (FinalStatus, user_message_string)
+        (FinalStatus, user_message_string, spoken_message_string)
     """
     # 1. Blocked / Denied
     if exec_res.blocked or exec_res.status in (ExecutionStatus.BLOCKED, ExecutionStatus.DENIED):
-        return FinalStatus.BLOCKED, exec_res.message
+        return FinalStatus.BLOCKED, exec_res.message, "This action was blocked."
 
     # 2. Execution Failed (e.g. unknown app/website target)
     if exec_res.status != ExecutionStatus.SUCCESS:
         action_readable = intent.action.name.replace("_", " ").lower()
         msg = exec_res.message or f"I couldn't {action_readable} {intent.target}."
-        return FinalStatus.FAILED, msg
+        return FinalStatus.FAILED, msg, exec_res.spoken_message or "I couldn't complete that action."
 
     # 3. Dry Run mode (for successful execution simulation)
     if is_dry_run:
-        return FinalStatus.DRY_RUN, exec_res.message
+        return FinalStatus.DRY_RUN, exec_res.message, exec_res.spoken_message or "Done."
 
     # 4. Real Execution — Check Verification Result
     if ver_res.status in (VerificationStatus.VERIFIED_SUCCESS, VerificationStatus.NOT_APPLICABLE):
-        return FinalStatus.SUCCESS, exec_res.message
+        return FinalStatus.SUCCESS, exec_res.message, exec_res.spoken_message or "Done."
 
     if ver_res.status == VerificationStatus.FAILED:
         action_readable = intent.action.name.replace("_", " ").lower()
@@ -50,7 +50,8 @@ def format_outcome(
         return (
             FinalStatus.FAILED,
             f"I tried to {action_readable}{target_str}, but I couldn't confirm that it succeeded.",
+            "I couldn't confirm that it succeeded."
         )
 
     # Fallback for SKIPPED or UNKNOWN verification status
-    return FinalStatus.SUCCESS, exec_res.message
+    return FinalStatus.SUCCESS, exec_res.message, exec_res.spoken_message or "Done."

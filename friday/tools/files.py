@@ -78,6 +78,11 @@ def find_file(query: str) -> dict:
             if candidates
             else f"No files matching \"{query}\" in safe directories."
         ),
+        "spoken_message": (
+            f"I found {len(candidates)} files matching {query}."
+            if candidates
+            else f"I couldn't find any files matching {query}."
+        ),
     }
 
 
@@ -97,14 +102,13 @@ def open_file(path: str, dry_run: bool = True) -> dict:
         return {"success": False, "message": f"Path is outside safe directories: {path}"}
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would open file: {p}"}
+        return {"success": True, "message": f"[DRY RUN] Would open file: {p}", "spoken_message": f"Opening file {p.name}."}
 
     try:
         os.startfile(str(p))
-        logger.info("Opened file: %s", p)
-        return {"success": True, "message": f"Opening {p.name}."}
+        return {"success": True, "message": f"Opened file: {p}", "spoken_message": f"Opening file {p.name}."}
     except Exception as e:
-        return {"success": False, "message": f"Failed to open file: {e}"}
+        return {"success": False, "message": f"Error opening file: {e}", "spoken_message": "I couldn't open the file."}
 
 
 def open_folder(name: str, dry_run: bool = True) -> dict:
@@ -121,11 +125,10 @@ def open_folder(name: str, dry_run: bool = True) -> dict:
     folder_path = _SAFE_DIRS[key]
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would open folder: {folder_path}"}
+        return {"success": True, "message": f"[DRY RUN] Would open folder: {folder_path}", "spoken_message": f"Opening folder {folder_path.name}."}
 
     try:
         os.startfile(str(folder_path))
-        logger.info("Opened folder: %s", folder_path)
-        return {"success": True, "message": f"Opening {key.title()} folder."}
+        return {"success": True, "message": f"Opened folder: {folder_path}", "spoken_message": f"Opening folder {folder_path.name}."}
     except Exception as e:
-        return {"success": False, "message": f"Failed to open folder: {e}"}
+        return {"success": False, "message": f"Error opening folder: {e}", "spoken_message": "I couldn't open the folder."}

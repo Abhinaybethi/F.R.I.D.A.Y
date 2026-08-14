@@ -46,6 +46,7 @@ class ExecutionResult:
     blocked: bool = False
     raw_tool_result: dict = field(default_factory=dict)
     execution_latency_ms: float = 0.0
+    spoken_message: str = ""
 
 
 @dataclass
@@ -63,6 +64,7 @@ class ActionOutcome:
     verification: VerificationResult
     final_status: FinalStatus
     user_message: str
+    spoken_message: str = ""
 
     @property
     def is_success(self) -> bool:
@@ -75,6 +77,8 @@ class ActionOutcome:
             return self.is_success
         if key == "message":
             return self.user_message
+        if key == "spoken_message":
+            return self.spoken_message
         if key == "blocked":
             return self.execution.blocked
         if key == "outcome":
@@ -92,6 +96,6 @@ class ActionOutcome:
 
     def __contains__(self, key: str) -> bool:
         """Dict-compatibility in operator."""
-        if key in ("success", "message", "blocked", "outcome"):
+        if key in ("success", "message", "spoken_message", "blocked", "outcome"):
             return True
         return key in self.execution.raw_tool_result

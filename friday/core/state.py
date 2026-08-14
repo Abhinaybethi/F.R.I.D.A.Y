@@ -52,6 +52,7 @@ class StateMachine:
                 ConversationState.EXECUTING,
                 ConversationState.RESPONDING,
                 ConversationState.WAITING_FOR_CONFIRMATION,
+                ConversationState.LISTENING,
             },
             ConversationState.EXECUTING: {
                 ConversationState.RESPONDING, 

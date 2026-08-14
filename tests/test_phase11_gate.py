@@ -124,7 +124,7 @@ def test_gate10_verification_failure_recovery():
     from friday.verification.models import ExecutionResult
     exec_res = ExecutionResult(action=Action.OPEN_APP, target="chrome", status=ExecutionStatus.SUCCESS, message="Opening Chrome.")
     ver_res = VerificationResult(status=VerificationStatus.FAILED, message="Process not found.")
-    final_st, msg = format_outcome(_intent(Action.OPEN_APP, "chrome"), exec_res, ver_res, is_dry_run=False)
+    final_st, msg, spoken = format_outcome(_intent(Action.OPEN_APP, "chrome"), exec_res, ver_res, is_dry_run=False)
     assert final_st == FinalStatus.FAILED
     assert "couldn't confirm" in msg
     print("[OK] Gate 10: Verification failure produces FinalStatus.FAILED user message")

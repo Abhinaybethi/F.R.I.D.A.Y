@@ -4,7 +4,16 @@ Logs to both the console and a bounded rotating log file.
 """
 import logging
 import os
+import contextvars
 from logging.handlers import RotatingFileHandler
+
+request_id_var = contextvars.ContextVar("request_id", default="-")
+
+class RequestIDFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = request_id_var.get()
+        return True
+
 
 
 def get_logger(name: str, log_file: str = "logs/friday.log", level: str = "INFO") -> logging.Logger:
@@ -19,16 +28,21 @@ def get_logger(name: str, log_file: str = "logs/friday.log", level: str = "INFO"
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
     formatter = logging.Formatter(
-        "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+        "%(asctime)s | %(name)s | %(levelname)s | [%(request_id)s] | %(message)s"
     )
+
+    req_filter = RequestIDFilter()
+    logger.addFilter(req_filter)
 
     # 5 MB max file size, 3 backup files retention
     file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(req_filter)
     logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(req_filter)
     logger.addHandler(console_handler)
 
     return logger

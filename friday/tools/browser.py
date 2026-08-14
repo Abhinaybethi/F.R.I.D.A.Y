@@ -31,11 +31,11 @@ def open_website(name: str, dry_run: bool = True) -> dict:
         return {"success": False, "message": f"Unknown website: {name!r}. Not in registry."}
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would open {url}"}
+        return {"success": True, "message": f"[DRY RUN] Would open {url}", "spoken_message": f"Opening {name.title()}."}
 
     webbrowser.open(url)
     logger.info("Opened website: %s", url)
-    return {"success": True, "message": f"Opening {name.title()}."}
+    return {"success": True, "message": f"Opened {url}", "spoken_message": f"Opening {name.title()}."}
 
 
 def search_web(query: str, dry_run: bool = True) -> dict:
@@ -52,8 +52,8 @@ def search_web(query: str, dry_run: bool = True) -> dict:
     url = _SEARCH_URL.format(safe_query)
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would search: {url}"}
+        return {"success": True, "message": f"[DRY RUN] Would search: {url}", "spoken_message": f"Searching for {query}."}
 
     webbrowser.open(url)
     logger.info("Searched: %s", query)
-    return {"success": True, "message": f"Searching for \"{query}\"."}
+    return {"success": True, "message": f"Searched: {query}", "spoken_message": f"Searching for {query}."}
