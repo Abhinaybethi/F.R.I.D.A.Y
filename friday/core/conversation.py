@@ -23,6 +23,7 @@ from friday.planning.plan_validator import validate_plan
 from friday.planning.context_resolver import ShortTermContext, resolve_context
 from friday.reasoning.interface import Reasoner
 from friday.reasoning.local_reasoner import OllamaReasoner
+from friday.reasoning.gating import should_call_reasoner
 
 logger = get_logger(__name__)
 
@@ -268,12 +269,17 @@ class ConversationManager:
                 self.state_machine.transition_to(ConversationState.LISTENING)
                 self.context.last_response = err
                 return err, True
-            
+
         intent = route(resolved_text)
         
-        # --- Local Reasoner Fallback ---
-        if intent.action == Action.UNKNOWN and self.reasoner and self.reasoner.is_available():
-            logger.info("[REASONER] Route unknown, falling back to reasoning layer")
+        # --- Local Reasoner Fallback Gate ---
+        call_reasoner, gating_reason = should_call_reasoner(
+            resolved_text,
+            intent,
+            is_in_confirmation=(self.state == ConversationState.WAITING_FOR_CONFIRMATION),
+        )
+        if call_reasoner and self.reasoner and self.reasoner.is_available():
+            logger.info("[REASONER] %s -> invoking reasoner layer", gating_reason)
             reasoned = self.reasoner.request(resolved_text, st_context)
             r_type = reasoned.get("type")
             

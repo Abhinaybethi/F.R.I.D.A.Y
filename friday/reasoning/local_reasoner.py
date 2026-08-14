@@ -57,9 +57,12 @@ class OllamaReasoner(Reasoner):
             "prompt": user_prompt,
             "system": SYSTEM_PROMPT,
             "stream": False,
+            "format": "json",
             "options": {
-                "temperature": 0.0
-            }
+                "temperature": 0.0,
+                "num_predict": 128,
+            },
+            "keep_alive": "30m",
         }
         
         try:
