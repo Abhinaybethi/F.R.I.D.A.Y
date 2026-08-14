@@ -9,10 +9,8 @@ import yaml
 from friday.voice.session_manager import VoiceSessionManager
 from friday.voice.text_to_speech import TextToSpeech
 from friday.core.wake_word import WakeWordListener
-from friday.core.conversation import ConversationManager
+from friday.core.conversation import ConversationManager, ConversationState
 from friday.utils.logger import get_logger
-
-
 from friday.utils.config_validator import validate_config
 
 
@@ -38,8 +36,8 @@ class Friday:
         voice_cfg = self.config.get("voice", {})
         tts_cfg = voice_cfg.get("tts", {})
         self.tts = TextToSpeech(
-            engine=tts_cfg.get("engine", "kokoro"),
-            fallback_engine=tts_cfg.get("fallback_engine", "piper"),
+            engine=tts_cfg.get("engine", "piper"),
+            fallback_engine=tts_cfg.get("fallback_engine", "kokoro"),
             voice=tts_cfg.get("voice", "af_heart"),
             speed=tts_cfg.get("speed", 1.0),
             device=tts_cfg.get("device", "auto"),
@@ -66,6 +64,20 @@ class Friday:
             allow_real_execution=self._allow_real_execution,
             permissions=self._permissions,
         )
+        from friday.voice.async_session import AsyncVoiceSessionManager
+        self.async_session = AsyncVoiceSessionManager(self.session_manager, self.tts)
+
+    def pause_listening(self):
+        """Pause voice command processing without shutting down streams."""
+        if self.conversation_manager.state != ConversationState.PAUSED:
+            self.conversation_manager.state_machine.transition_to(ConversationState.PAUSED)
+            self.logger.info("Listening paused.")
+
+    def resume_listening(self):
+        """Resume voice command processing from PAUSED state."""
+        if self.conversation_manager.state == ConversationState.PAUSED:
+            self.conversation_manager.state_machine.transition_to(ConversationState.LISTENING)
+            self.logger.info("Listening resumed.")
 
     # ------------------------------------------------------------------
     def _handle(self, transcript: str) -> bool:
@@ -73,24 +85,33 @@ class Friday:
         Route one transcript through the conversation manager.
         Returns False when the user asks to stop/exit.
         """
+        if self.conversation_manager.state == ConversationState.PAUSED:
+            return True
+
         response, keep_running = self.conversation_manager.handle_transcript(transcript)
         if response:
+            self.async_session.start_barge_in_listener()
             self.tts.speak(response)
+            self.async_session.stop_barge_in_listener()
         return keep_running
 
     def run(self):
-        self.tts.speak("Friday online. Say my name whenever you need me.")
+        self.tts.speak("Friday online. Listening...")
 
         with self.session_manager:
             self.conversation_manager.start_session()
             while True:
+                if self.conversation_manager.state == ConversationState.PAUSED:
+                    import time
+                    time.sleep(0.1)
+                    continue
+
                 self.wake_word_listener.wait_for_wake_word()
-                self.tts.speak("Yes?")
 
                 transcript = self.session_manager.listen_once()
 
-                if not transcript:
-                    self.tts.speak("Sorry, I didn't catch that.")
+                # Debounce background noise / empty STT fragments
+                if not transcript or len(transcript.strip()) < 2:
                     continue
 
                 keep_running = self._handle(transcript)

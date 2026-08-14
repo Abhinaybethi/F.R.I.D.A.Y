@@ -82,10 +82,14 @@ class ConversationManager:
         
     def _get_short_term_context(self) -> ShortTermContext:
         action = self.context.last_intent.action if self.context.last_intent else None
+        target = self.context.last_intent.target if self.context.last_intent else ""
+        search_results = self.context.last_tool_result.get("results", []) if isinstance(self.context.last_tool_result, dict) else []
         return ShortTermContext(
             last_search_query=self.context.last_search_query,
+            last_search_results=search_results,
             last_tool_result=self.context.last_tool_result,
             last_action=action,
+            last_target=target,
             last_transcript=self.context.last_transcript,
             last_response=self.context.last_response
         )
@@ -280,7 +284,16 @@ class ConversationManager:
         )
         if call_reasoner and self.reasoner and self.reasoner.is_available():
             logger.info("[REASONER] %s -> invoking reasoner layer", gating_reason)
-            reasoned = self.reasoner.request(resolved_text, st_context)
+            try:
+                reasoned = self.reasoner.request(resolved_text, st_context)
+            except Exception as e:
+                logger.warning("[REASONER] Reasoner request failed: %s", e)
+                self.state_machine.transition_to(ConversationState.RESPONDING)
+                self.state_machine.transition_to(ConversationState.LISTENING)
+                err_msg = "Reasoning service unavailable."
+                self.context.last_response = err_msg
+                return err_msg, True
+
             r_type = reasoned.get("type")
             
             if r_type == "plan":

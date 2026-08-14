@@ -23,6 +23,9 @@ VALID_PERMISSION_KEYS = {
     "get_time",
     "find_file",
     "open_file",
+    "minimize_app",
+    "maximize_app",
+    "take_screenshot",
 }
 
 

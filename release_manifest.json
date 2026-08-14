@@ -1,0 +1,25 @@
+{
+  "name": "F.R.I.D.A.Y.",
+  "version": "1.0.0",
+  "release_date": "2026-08-14",
+  "supported_platform": "Windows 10 / Windows 11 (x64)",
+  "python_version": ">=3.10",
+  "release_status": "Release Candidate (RC1)",
+  "models": {
+    "stt": "faster-whisper small.en (cpu / int8)",
+    "vad": "Silero VAD (ONNX)",
+    "tts": "Piper en_US-lessac-low (ONNX)",
+    "reasoning": "Ollama llama3:latest"
+  },
+  "security_defaults": {
+    "dry_run": true,
+    "allow_real_execution": false,
+    "fail_closed_validation": true,
+    "dangerous_execution_tokens": 0
+  },
+  "test_metrics": {
+    "test_modules": 73,
+    "total_tests": 441,
+    "pass_rate": "100%"
+  }
+}

@@ -155,5 +155,11 @@ def route(raw_text: str) -> Intent:
             raw_text=raw_text,
         )
 
+    # Attempt fuzzy / phonetic target matching before returning UNKNOWN
+    from friday.intent.fuzzy_router import fuzzy_route
+    fuzzy_match = fuzzy_route(raw_text)
+    if fuzzy_match:
+        return fuzzy_match
+
     # No pattern matched
     return Intent(action=Action.UNKNOWN, raw_text=raw_text)

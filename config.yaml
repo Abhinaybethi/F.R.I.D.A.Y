@@ -1,15 +1,35 @@
-# Friday Assistant Configuration
-# Edit values here instead of digging through code.
+# F.R.I.D.A.Y. Assistant Configuration
+# Structured into Security, Runtime, Voice, Reasoning, and UI sections.
 
 wake_word: "friday"
+
+security:
+  dry_run: true
+  allow_real_execution: false
+
+tools:
+  dry_run: true        # Backward compatibility key
+  allow_real_execution: false
+  permissions:
+    open_app: true
+    close_app: true
+    open_folder: true
+    open_website: true
+    search_web: true
+    get_time: true
+    find_file: true
+    open_file: true
+    minimize_app: true
+    maximize_app: true
+    take_screenshot: true
 
 voice:
   offline_only: true
   debug:
-    save_audio: false          # set true during development to inspect captured audio
-    directory: debug_audio     # WAV files saved here: 001.wav, 002.wav, ...
-    playback_audio: false      # prompt to play each WAV after capture
-    max_files: 50              # rotate (overwrite oldest) after this many files
+    save_audio: false
+    directory: debug_audio
+    playback_audio: false
+    max_files: 50
   vad:
     enabled: true
     model_path: "models/vad/silero_vad.onnx"
@@ -37,28 +57,16 @@ listening:
 
 brain:
   ollama_url: "http://localhost:11434"
-  ollama_model: "llama3.2"          # run: ollama pull llama3.2  (one-time, free, offline after)
+  ollama_model: "llama3:latest"
+
+reasoning:
+  model: "llama3:latest"
+  endpoint: "http://localhost:11434/api/generate"
 
 logging:
   level: "INFO"
   file: "logs/friday.log"
 
-tools:
-  dry_run: true        # Gate 1: set false only when you trust the router and want real execution
-  allow_real_execution: false  # Gate 2: real execution requires dry_run: false AND allow_real_execution: true
-
-  # Gate 3: per-action opt-in (all three gates must pass for real execution)
-  # Setting any of these to false denies that action category entirely.
-  permissions:
-    open_app: true
-    close_app: true
-    open_folder: true
-    open_website: true
-    search_web: true
-    get_time: true
-    find_file: true
-    open_file: true
-
-reasoning:
-  model: "llama3:latest"
-  endpoint: "http://localhost:11434/api/generate"
+ui:
+  status_engine: true
+  tray_enabled: true

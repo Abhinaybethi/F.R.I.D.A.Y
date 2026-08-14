@@ -60,7 +60,7 @@ class OllamaReasoner(Reasoner):
             "format": "json",
             "options": {
                 "temperature": 0.0,
-                "num_predict": 128,
+                "num_predict": 256,
             },
             "keep_alive": "30m",
         }

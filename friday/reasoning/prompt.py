@@ -27,6 +27,8 @@ Your response must be a single JSON object. Do not wrap it in markdown code bloc
 Choose one of the following schemas based on the request:
 
 1. Single Intent
+Example 1: "open chrome" -> {{"type": "intent", "action": "OPEN_APP", "target": "chrome", "arguments": {{}}, "confidence": 0.95}}
+Example 2: "what time is it" -> {{"type": "intent", "action": "GET_TIME", "target": "", "arguments": {{}}, "confidence": 0.95}}
 {{
   "type": "intent",
   "action": "OPEN_APP",

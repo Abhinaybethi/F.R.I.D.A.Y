@@ -185,6 +185,18 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
     if action == Action.GET_TIME:
         return system.get_time()               # read-only, no dry_run needed
 
+    if action == Action.MINIMIZE_APP:
+        from friday.tools import desktop
+        return desktop.minimize_app(target, dry_run=is_dry_run)
+
+    if action == Action.MAXIMIZE_APP:
+        from friday.tools import desktop
+        return desktop.maximize_app(target, dry_run=is_dry_run)
+
+    if action == Action.TAKE_SCREENSHOT:
+        from friday.tools import desktop
+        return desktop.take_screenshot(target, dry_run=is_dry_run)
+
     return {"success": False, "message": f"No tool registered for action: {action.name}"}
 
 

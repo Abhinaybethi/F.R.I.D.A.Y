@@ -13,6 +13,7 @@ class ConversationState(Enum):
     WAITING_FOR_CONFIRMATION = auto()
     EXECUTING               = auto()
     RESPONDING              = auto()
+    PAUSED                  = auto()
     STOPPING                = auto()
 
 
@@ -39,8 +40,9 @@ class StateMachine:
 
         # Allowed transitions
         allowed = {
-            ConversationState.IDLE: {ConversationState.LISTENING},
-            ConversationState.LISTENING: {ConversationState.PROCESSING, ConversationState.IDLE},
+            ConversationState.IDLE: {ConversationState.LISTENING, ConversationState.PAUSED},
+            ConversationState.LISTENING: {ConversationState.PROCESSING, ConversationState.IDLE, ConversationState.PAUSED},
+            ConversationState.PAUSED: {ConversationState.LISTENING, ConversationState.IDLE},
             ConversationState.PROCESSING: {
                 ConversationState.EXECUTING,
                 ConversationState.WAITING_FOR_CONFIRMATION,
@@ -55,7 +57,7 @@ class StateMachine:
                 ConversationState.RESPONDING, 
                 ConversationState.WAITING_FOR_CONFIRMATION
             },
-            ConversationState.RESPONDING: {ConversationState.LISTENING, ConversationState.IDLE},
+            ConversationState.RESPONDING: {ConversationState.LISTENING, ConversationState.IDLE, ConversationState.PAUSED},
             ConversationState.STOPPING: {ConversationState.IDLE},
         }
 

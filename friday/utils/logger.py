@@ -1,9 +1,10 @@
 """
 Shared logger setup used across all of Friday's modules.
-Logs to both the console and a rotating-friendly log file.
+Logs to both the console and a bounded rotating log file.
 """
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 
 def get_logger(name: str, log_file: str = "logs/friday.log", level: str = "INFO") -> logging.Logger:
@@ -21,7 +22,8 @@ def get_logger(name: str, log_file: str = "logs/friday.log", level: str = "INFO"
         "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
     )
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # 5 MB max file size, 3 backup files retention
+    file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

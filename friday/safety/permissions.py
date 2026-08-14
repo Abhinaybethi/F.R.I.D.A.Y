@@ -23,8 +23,10 @@ _ACTION_PERMISSION_KEY: dict[Action, str] = {
     Action.SEARCH_WEB:    "search_web",
     Action.GET_TIME:      "get_time",
     Action.FIND_FILE:     "find_file",
-    Action.OPEN_FILE:     "open_file",
     Action.OPEN_FOLDER:   "open_folder",
+    Action.MINIMIZE_APP:  "minimize_app",
+    Action.MAXIMIZE_APP:  "maximize_app",
+    Action.TAKE_SCREENSHOT: "take_screenshot",
 }
 
 
