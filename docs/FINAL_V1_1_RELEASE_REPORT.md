@@ -10,10 +10,11 @@
 
 ## 1. Release Overview & Commit Metadata
 
+- **Release Commit**: `1f2e6e3d5483a93aeef46e8cddb599ce3c0250df` ("Fix release smoke test version assertion for v1.1.0")
 - **Git Tag**: `v1.1.0` (Annotated tag: `"F.R.I.D.A.Y. v1.1.0"`)
 - **Version Consistency**: `main.py`, `friday/__init__.py`, `release_manifest.json`, and `RELEASE_NOTES.md` all consistently report **`1.1.0`**.
-- **GitHub Release Status**: Published successfully via `gh release create v1.1.0`.
-- **CI Build Result**: GitHub Actions Workflow (`F.R.I.D.A.Y. Continuous Integration`) passed cleanly on `main`.
+- **GitHub Release Status**: Published successfully (`https://github.com/Abhinaybethi/F.R.I.D.A.Y/releases/tag/v1.1.0`).
+- **CI Build Result**: GitHub Actions Workflow (`F.R.I.D.A.Y. Continuous Integration` Run `#31895353177`) **SUCCESS** on `main`.
 
 ---
 
