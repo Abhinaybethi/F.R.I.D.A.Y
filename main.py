@@ -1,7 +1,7 @@
 """
 F.R.I.D.A.Y. — Personal AI Voice Assistant
 ==========================================
-Canonical production entrypoint for F.R.I.D.A.Y. v1.0.0
+Canonical production entrypoint for F.R.I.D.A.Y. v1.1.0
 
 Usage:
     python main.py

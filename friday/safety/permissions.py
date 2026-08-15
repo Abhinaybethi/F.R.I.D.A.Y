@@ -17,16 +17,21 @@ from friday.intent.models import Action, Intent
 
 # Maps Action enum member to the config.yaml permissions key
 _ACTION_PERMISSION_KEY: dict[Action, str] = {
-    Action.OPEN_APP:      "open_app",
-    Action.CLOSE_APP:     "close_app",
-    Action.OPEN_WEBSITE:  "open_website",
-    Action.SEARCH_WEB:    "search_web",
-    Action.GET_TIME:      "get_time",
-    Action.FIND_FILE:     "find_file",
-    Action.OPEN_FOLDER:   "open_folder",
-    Action.MINIMIZE_APP:  "minimize_app",
-    Action.MAXIMIZE_APP:  "maximize_app",
+    Action.OPEN_APP:        "open_app",
+    Action.CLOSE_APP:       "close_app",
+    Action.OPEN_WEBSITE:    "open_website",
+    Action.READ_WEBSITE:    "read_website",
+    Action.SEARCH_WEB:      "search_web",
+    Action.GET_TIME:        "get_time",
+    Action.FIND_FILE:       "find_file",
+    Action.OPEN_FILE:       "open_file",
+    Action.OPEN_FOLDER:     "open_folder",
+    Action.MINIMIZE_APP:    "minimize_app",
+    Action.MAXIMIZE_APP:    "maximize_app",
     Action.TAKE_SCREENSHOT: "take_screenshot",
+    Action.REMEMBER:        "remember",
+    Action.RECALL:          "recall",
+    Action.FORGET:          "forget",
 }
 
 
@@ -49,7 +54,7 @@ def check_permission(intent: Intent, permissions: dict) -> PermissionResult:
         1. UNKNOWN action  → DENIED
         2. Action not in permission map → DENIED
         3. permissions[key] is False → DENIED
-        4. CLOSE_APP → CONFIRM_REQUIRED (always, regardless of confidence)
+        4. CLOSE_APP or FORGET → CONFIRM_REQUIRED (always, regardless of confidence)
         5. Otherwise → ALLOWED
     """
     if intent.action == Action.UNKNOWN:
@@ -65,8 +70,8 @@ def check_permission(intent: Intent, permissions: dict) -> PermissionResult:
     if not permissions.get(key, False):
         return PermissionResult.DENIED
 
-    # CLOSE_APP always requires explicit confirmation
-    if intent.action == Action.CLOSE_APP:
+    # CLOSE_APP and FORGET always require explicit confirmation
+    if intent.action in (Action.CLOSE_APP, Action.FORGET):
         return PermissionResult.CONFIRM_REQUIRED
 
     return PermissionResult.ALLOWED

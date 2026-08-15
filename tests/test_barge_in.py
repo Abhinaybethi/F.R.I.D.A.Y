@@ -16,7 +16,7 @@ def test_tts_stop_signal_resets_speaking_state():
     tts = TextToSpeech(engine="piper")
     assert tts.is_speaking() is False
     tts.stop()
-    assert tts._stop_requested is True
+    assert tts.abort_event.is_set() is True
 
 
 def test_tts_clean_for_speech_strips_dry_run_tags():

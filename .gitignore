@@ -8,3 +8,6 @@ models/
 .env
 .pytest_cache/
 .DS_Store
+.data/
+pipeline_metrics.txt
+stress_metrics.txt

@@ -42,6 +42,7 @@ class Friday:
             speed=tts_cfg.get("speed", 1.0),
             device=tts_cfg.get("device", "auto"),
         )
+        self.tts.warmup()
 
         listening_cfg = self.config.get("listening", {})
         self.session_manager = VoiceSessionManager(

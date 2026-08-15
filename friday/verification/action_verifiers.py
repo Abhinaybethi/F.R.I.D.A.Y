@@ -126,9 +126,13 @@ def verify_open_folder(target: str, is_dry_run: bool) -> VerificationResult:
     )
 
 
+from urllib.parse import urlparse
+from friday.tools.browser import _WEBSITE_URLS, _ALLOWED_DOMAINS
+
+
 def verify_open_website(target: str, is_dry_run: bool) -> VerificationResult:
     """
-    Verify OPEN_WEBSITE by checking registry URL and browser process availability.
+    Verify OPEN_WEBSITE by checking registry URL or allowed domain whitelist.
     """
     if is_dry_run:
         return VerificationResult(
@@ -136,7 +140,26 @@ def verify_open_website(target: str, is_dry_run: bool) -> VerificationResult:
             message=f"[DRY RUN] Verification simulated for opening website {target!r}.",
         )
 
-    url = _WEBSITE_URLS.get(target.lower().strip())
+    if not target or not isinstance(target, str) or not target.strip():
+        return VerificationResult(
+            status=VerificationStatus.FAILED,
+            message="Empty or invalid website target.",
+        )
+
+    target_clean = target.strip()
+    target_lower = target_clean.lower()
+    url = _WEBSITE_URLS.get(target_lower)
+
+    if not url:
+        if target_lower.startswith("http://") or target_lower.startswith("https://"):
+            try:
+                parsed = urlparse(target_clean)
+                hostname = (parsed.hostname or "").lower()
+                if hostname in _ALLOWED_DOMAINS or any(hostname.endswith("." + d) for d in _ALLOWED_DOMAINS):
+                    url = target_clean
+            except Exception:
+                pass
+
     if not url:
         return VerificationResult(
             status=VerificationStatus.FAILED,
@@ -145,7 +168,7 @@ def verify_open_website(target: str, is_dry_run: bool) -> VerificationResult:
 
     return VerificationResult(
         status=VerificationStatus.VERIFIED_SUCCESS,
-        message=f"Verified website navigation initiated for {target.title()} ({url}).",
+        message=f"Verified website navigation initiated for {target_clean.title()} ({url}).",
         details={"url": url},
     )
 

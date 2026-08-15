@@ -27,8 +27,8 @@ def validate(intent: Intent) -> Policy:
         return Policy.REJECT
     if intent.confidence < _CONFIRM_THRESHOLD:
         return Policy.REJECT
-    # CLOSE_APP ALWAYS requires confirmation for now
-    if intent.action == Action.CLOSE_APP:
+    # CLOSE_APP and FORGET ALWAYS require confirmation
+    if intent.action in (Action.CLOSE_APP, Action.FORGET):
         return Policy.CONFIRM
     if intent.confidence >= _SAFE_THRESHOLD:
         return Policy.SAFE

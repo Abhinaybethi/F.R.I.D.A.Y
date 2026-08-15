@@ -43,20 +43,19 @@ def parse_confirmation_response(transcript: str) -> bool | None:
 def format_confirmation_prompt(intent: Intent) -> str:
     """
     Concise, natural user-facing confirmation prompt message.
-
-    Examples:
-        OPEN_APP(chrome)     -> "Did you mean Chrome?"
-        OPEN_WEBSITE(youtube)-> "Did you mean Youtube?"
-        CLOSE_APP(chrome)    -> "Do you want me to close Chrome?"
     """
-    target = intent.target.title() if intent.target else ""
+    target = intent.target if intent.target else ""
 
     if intent.action == Action.CLOSE_APP:
-        target_display = target if target else "the application"
+        target_display = target.title() if target else "the application"
         return f"Do you want me to close {target_display}?"
 
+    if intent.action == Action.FORGET:
+        target_display = target if target else "that memory"
+        return f"Do you want me to forget '{target_display}'?"
+
     if target:
-        return f"Did you mean {target}?"
+        return f"Did you mean {target.title()}?"
 
     action_label = intent.action.name.replace("_", " ").title()
     return f"Did you mean {action_label}?"

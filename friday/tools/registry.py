@@ -14,7 +14,7 @@ import time
 from friday.intent.models import Action, Intent
 from friday.safety.permissions import check_permission, PermissionResult
 from friday.utils.audit_logger import log_action
-from friday.tools import apps, browser, files, system
+from friday.tools import apps, browser, files, system, memory
 
 from friday.verification.models import (
     ExecutionStatus,
@@ -173,6 +173,9 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
     if action == Action.OPEN_WEBSITE:
         return browser.open_website(target, dry_run=is_dry_run)
 
+    if action == Action.READ_WEBSITE:
+        return browser.read_website(target, dry_run=is_dry_run)
+
     if action == Action.SEARCH_WEB:
         return browser.search_web(target, dry_run=is_dry_run)
 
@@ -200,6 +203,15 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
         from friday.tools import desktop
         return desktop.take_screenshot(target, dry_run=is_dry_run)
 
+    if action == Action.REMEMBER:
+        return memory.remember(target, dry_run=is_dry_run)
+
+    if action == Action.RECALL:
+        return memory.recall(target)           # read-only, no dry_run needed
+
+    if action == Action.FORGET:
+        return memory.forget(target, dry_run=is_dry_run)
+
     return {"success": False, "message": f"No tool registered for action: {action.name}"}
 
 
@@ -209,8 +221,12 @@ _DEFAULT_PERMISSIONS: dict = {
     "close_app":    True,
     "open_folder":  True,
     "open_website": True,
+    "read_website": True,
     "search_web":   True,
     "get_time":     True,
     "find_file":    True,
     "open_file":    True,
+    "remember":     True,
+    "recall":       True,
+    "forget":       True,
 }

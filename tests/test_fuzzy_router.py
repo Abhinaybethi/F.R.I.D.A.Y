@@ -24,6 +24,7 @@ def test_fuzzy_router_app_near_misses():
         ("openvscode", Action.OPEN_APP, "vscode"),
         ("open note pad", Action.OPEN_APP, "notepad"),
     ]
+    route("warm up")  # Warm-up cold start
     for transcript, expected_action, expected_target in near_misses:
         t0 = time.perf_counter()
         intent = route(transcript)

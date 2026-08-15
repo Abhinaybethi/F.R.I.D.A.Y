@@ -2,6 +2,7 @@
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from typing import Dict, List
 
 from friday.intent.models import Intent
 
@@ -23,3 +24,4 @@ class ActionPlan:
     steps: list[Intent] = field(default_factory=list)
     current_step_index: int = 0
     state: PlanState = PlanState.READY
+    fallbacks: Dict[int, List[Intent]] = field(default_factory=dict)

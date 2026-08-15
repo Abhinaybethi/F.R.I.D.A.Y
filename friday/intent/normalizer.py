@@ -16,7 +16,18 @@ def normalize(text: str) -> str:
     deterministic router can match the core command.
     """
     text = text.lower()
-    text = re.sub(r"[^\w\s]", "", text)   # drop punctuation
+
+    # Preserve URLs from punctuation stripping
+    url_match = re.search(r"https?://\S+", text)
+    if url_match:
+        url_str = url_match.group(0)
+        placeholder = "__URL_PLACEHOLDER__"
+        text_no_url = text.replace(url_str, placeholder)
+        text_clean = re.sub(r"[^\w\s]", "", text_no_url)
+        text = text_clean.replace(placeholder, url_str)
+    else:
+        text = re.sub(r"[^\w\s]", "", text)
+
     text = re.sub(r"\s+", " ", text).strip()
 
     # Strip conversational fillers for deterministic matching

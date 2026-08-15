@@ -64,17 +64,34 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
     (re.compile(r"^open(?:\s+my)?\s+" + _FOLDERS + r"(?:\s+folder)?$"),
      lambda m: (Action.OPEN_FOLDER, m.group(1), _HIGH)),
 
-    # 5. FIND_FILE
+    # 5. FIND_FILE & OPEN_FILE
+    (re.compile(r"^open file\s+(.+)$"),
+     lambda m: (Action.OPEN_FILE, m.group(1).strip(), _HIGH)),
+
     (re.compile(r"^find(?:\s+my)?\s+(.+)$"),
-     lambda m: (Action.FIND_FILE, m.group(1), _MEDIUM)),
+     lambda m: (Action.FIND_FILE, m.group(1).strip(), _MEDIUM)),
 
     # 6. OPEN_WEBSITE (explicit)
     (re.compile(r"^(?:go to|visit|navigate to|browse to|open website)\s+(.+)$"),
      lambda m: (Action.OPEN_WEBSITE, m.group(1), _MEDIUM)),
 
+    # READ_WEBSITE
+    (re.compile(r"^(?:read|summarize|extract)\s+(?:the\s+)?(?:page|website|site|url\s+)?(.+)$"),
+     lambda m: (Action.READ_WEBSITE, m.group(1).strip(), _MEDIUM)),
+
+    # MEMORY INTENTS
+    (re.compile(r"^(?:remember|memorize|save|note|keep in mind)(?:\s+(?:that|this))?\s+(.+)$"),
+     lambda m: (Action.REMEMBER, m.group(1).strip(), _HIGH)),
+
+    (re.compile(r"^(?:recall|what is in my memory about|do you remember)\s+(.+)$"),
+     lambda m: (Action.RECALL, m.group(1).strip(), _MEDIUM)),
+
+    (re.compile(r"^(?:forget|erase my memory of|delete my memory of|remove from memory)\s+(.+)$"),
+     lambda m: (Action.FORGET, m.group(1).strip(), _HIGH)),
+
     # 7. OPEN — "open / launch / start / run X" (resolve by target)
     (re.compile(r"^(?:open|launch|start|run)\s+(?:the\s+|my\s+)?(.+)$"),
-     lambda m: (None, m.group(1), _MEDIUM)),
+     lambda m: (None, m.group(1).strip(), _MEDIUM)),
 
     # 8. COMPOUND — STT artifact: "openvscode", "closechrome" (no space)
     (re.compile(r"^(open|close|launch)([\w]+)$"),
@@ -132,7 +149,8 @@ def route(raw_text: str) -> Intent:
 
         elif action in (
             Action.SEARCH_WEB, Action.FIND_FILE, Action.GET_TIME,
-            Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT
+            Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
+            Action.REMEMBER, Action.RECALL, Action.FORGET, Action.READ_WEBSITE
         ):
             target_name, target_conf = target_raw, 1.0
 
@@ -145,13 +163,14 @@ def route(raw_text: str) -> Intent:
             target_name, target_conf = target_raw, 0.5
 
         conf = compute(intent_conf, target_conf)
+        req_conf = (conf < 0.85) or (action in (Action.CLOSE_APP, Action.FORGET))
         return Intent(
             action=action,
             target=target_name,
             intent_confidence=intent_conf,
             target_confidence=target_conf,
             confidence=conf,
-            requires_confirmation=conf < 0.85,
+            requires_confirmation=req_conf,
             raw_text=raw_text,
         )
 

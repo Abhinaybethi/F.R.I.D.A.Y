@@ -96,7 +96,7 @@ def test_gate7_barge_in_stop_signal():
     from friday.voice.text_to_speech import TextToSpeech
     tts = TextToSpeech(engine="piper")
     tts.stop()
-    assert tts._stop_requested is True
+    assert tts.abort_event.is_set() is True
     print("[OK] Gate 7: Audio barge-in stop signal functions cleanly")
 
 

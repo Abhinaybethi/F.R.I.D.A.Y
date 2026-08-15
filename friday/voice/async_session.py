@@ -44,20 +44,23 @@ class AsyncVoiceSessionManager:
 
     def _monitor_loop(self):
         """Background thread loop checking VAD while TTS is speaking."""
+        import queue
         logger.debug("[ASYNC SESSION] Barge-in monitor started.")
         while not self._stop_event.is_set() and self.tts.is_speaking():
             try:
                 # Check VAD status on incoming audio chunk
                 if hasattr(self.session_manager, "vad") and self.session_manager.vad:
-                    audio_chunk = self.session_manager.audio_input.read_chunk()
-                    if audio_chunk is not None and len(audio_chunk) > 0:
-                        is_speech, _ = self.session_manager.vad.process_chunk(audio_chunk)
+                    try:
+                        audio_chunk = self.session_manager.audio.queue.get(timeout=0.05)
+                        is_speech = self.session_manager.vad.is_speech(audio_chunk)
                         if is_speech:
                             logger.info("[ASYNC SESSION] User speech detected mid-TTS output. Triggering barge-in stop.")
                             self.tts.stop()
                             self._barge_in_triggered = True
                             break
+                    except queue.Empty:
+                        pass
             except Exception as e:
                 logger.debug("[ASYNC SESSION] Monitor exception: %s", e)
                 break
-            time.sleep(0.02)
+            time.sleep(0.01)

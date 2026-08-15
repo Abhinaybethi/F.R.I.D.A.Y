@@ -78,6 +78,9 @@ def resolve_app(target: str) -> tuple[str, float]:
 def resolve_website(target: str) -> tuple[str, float]:
     """Returns (canonical_website_name, confidence)."""
     t = target.lower().strip()
+    if t.startswith("http://") or t.startswith("https://"):
+        return t, 1.0
+
     if t in _WEBSITE_ALIASES:
         return _WEBSITE_ALIASES[t], 1.0
 

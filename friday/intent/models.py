@@ -7,6 +7,7 @@ class Action(Enum):
     OPEN_APP      = auto()
     CLOSE_APP     = auto()
     OPEN_WEBSITE  = auto()
+    READ_WEBSITE  = auto()
     SEARCH_WEB    = auto()
     FIND_FILE     = auto()
     OPEN_FILE     = auto()
@@ -19,6 +20,9 @@ class Action(Enum):
     MINIMIZE_APP   = auto()
     MAXIMIZE_APP   = auto()
     TAKE_SCREENSHOT = auto()
+    REMEMBER      = auto()
+    RECALL        = auto()
+    FORGET        = auto()
     UNKNOWN       = auto()
 
 

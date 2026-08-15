@@ -21,7 +21,8 @@ class TextToSpeech:
         self.kokoro = None
         self.piper = None
         self._is_speaking = False
-        self._stop_requested = False
+        import threading
+        self.abort_event = threading.Event()
         
         with open("config.yaml", "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
@@ -61,6 +62,22 @@ class TextToSpeech:
         except Exception as e:
             logger.error("Failed to load Piper fallback: %s", e)
 
+    def warmup(self) -> None:
+        """Pre-synthesizes a single short token to pre-load ONNX sessions and avoid cold-start latency on first turn."""
+        try:
+            if self.piper is not None:
+                wav_io = io.BytesIO()
+                with wave.open(wav_io, "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(self.piper.config.sample_rate)
+                    self.piper.synthesize_wav("a", wav_file)
+            elif self.kokoro is not None:
+                self.kokoro.create("a", voice=self.voice, speed=1.0, lang="en-us")
+            logger.info("TTS model pre-warming completed.")
+        except Exception as e:
+            logger.warning("TTS model pre-warming skipped: %s", e)
+
     def _clean_for_speech(self, text: str) -> str:
         if not text:
             return ""
@@ -73,7 +90,7 @@ class TextToSpeech:
         return text.strip()
 
     def stop(self):
-        self._stop_requested = True
+        self.abort_event.set()
         sd.stop()
         
     def is_speaking(self):
@@ -89,7 +106,7 @@ class TextToSpeech:
             
         print(f"Friday: {clean_text}")
         
-        self._stop_requested = False
+        self.abort_event.clear()
         self._is_speaking = True
         
         try:
@@ -126,11 +143,11 @@ class TextToSpeech:
     def _play_interruptible(self, data, fs):
         duration = len(data) / fs
         sd.play(data, fs)
-        start_time = time.time()
-        while time.time() - start_time < duration and not self._stop_requested:
-            sd.sleep(50)
+
+        # Wait until duration has passed or abort_event is set
+        aborted = self.abort_event.wait(duration)
             
-        if self._stop_requested:
+        if aborted:
             sd.stop()
         else:
             sd.wait()
