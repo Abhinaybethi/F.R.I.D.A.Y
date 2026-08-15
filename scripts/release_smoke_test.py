@@ -32,8 +32,8 @@ def run_release_smoke_test() -> bool:
     print("=" * 60)
 
     # 1. Version Check
-    assert __version__ == "1.0.0"
-    print("  [OK] 1. Version check: v1.0.0")
+    assert __version__ in ("1.0.0", "1.1.0")
+    print(f"  [OK] 1. Version check: v{__version__}")
 
     # 2. Config Validation
     cfg_path = Path(__file__).parent.parent / "config.yaml"
