@@ -72,7 +72,7 @@ class OllamaReasoner(Reasoner):
                 headers={'Content-Type': 'application/json'},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=60.0) as response:
+            with urllib.request.urlopen(req, timeout=3.0) as response:
                 if response.status == 200:
                     result = json.loads(response.read().decode('utf-8'))
                     raw_output = result.get("response", "")

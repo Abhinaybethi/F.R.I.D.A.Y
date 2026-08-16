@@ -47,7 +47,7 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
      lambda m: (Action.SYSTEM_REPEAT, "", 1.0)),
 
     # 1. GET_TIME — no target needed
-    (re.compile(r"^what(?:s| is)?(?: the)? time(?:(?: is it)?(?: now)?)?$|"
+    (re.compile(r"^what(?:s| is)?(?: the)? time(?:(?: is it)?(?: (?:right\s+)?now)?)?$|"
                 r"^(?:current time|time now|tell me the time)$"),
      lambda m: (Action.GET_TIME, "", _HIGH)),
 
@@ -89,6 +89,19 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
     (re.compile(r"^(?:forget|erase my memory of|delete my memory of|remove from memory)\s+(.+)$"),
      lambda m: (Action.FORGET, m.group(1).strip(), _HIGH)),
 
+    # SYSTEM AUDIO & MEDIA INTENTS
+    (re.compile(r"^(?:set volume to|change volume to|volume to|set volume)\s+(.+)$"),
+     lambda m: (Action.SET_VOLUME, m.group(1).strip(), _HIGH)),
+
+    (re.compile(r"^(?:mute|mute audio|mute sound|silence)$"),
+     lambda m: (Action.MUTE_AUDIO, "", _HIGH)),
+
+    (re.compile(r"^(?:unmute|unmute audio|unmute sound)$"),
+     lambda m: (Action.UNMUTE_AUDIO, "", _HIGH)),
+
+    (re.compile(r"^(?:pause|pause media|pause music|play media|pause video|stop music)$"),
+     lambda m: (Action.PAUSE_MEDIA, "", _HIGH)),
+
     # 7. OPEN — "open / launch / start / run X" (resolve by target)
     (re.compile(r"^(?:open|launch|start|run)\s+(?:the\s+|my\s+)?(.+)$"),
      lambda m: (None, m.group(1).strip(), _MEDIUM)),
@@ -101,6 +114,16 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
          _LOW,
      )),
 ]
+
+_CONVERSATIONAL_PREFIXES = re.compile(
+    r"^(?:"
+    r"(?:hey\s+)?friday[,\s]+"
+    r"|(?:can|could|would)\s+you\s+(?:please\s+)?"
+    r"|(?:please\s+)"
+    r"|(?:i\s+want\s+to|i'd\s+like\s+to|i\s+need\s+to)\s+"
+    r")",
+    re.IGNORECASE
+)
 
 
 def _resolve_open(target_raw: str) -> tuple[Action, str, float]:
@@ -126,6 +149,9 @@ def route(raw_text: str) -> Intent:
     matches or confidence is too low to be meaningful.
     """
     text = normalize(raw_text)
+    cleaned = _CONVERSATIONAL_PREFIXES.sub("", text).strip()
+    if cleaned:
+        text = cleaned
 
     for pattern, handler in _PATTERNS:
         m = pattern.match(text)
@@ -150,7 +176,8 @@ def route(raw_text: str) -> Intent:
         elif action in (
             Action.SEARCH_WEB, Action.FIND_FILE, Action.GET_TIME,
             Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
-            Action.REMEMBER, Action.RECALL, Action.FORGET, Action.READ_WEBSITE
+            Action.REMEMBER, Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
+            Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA
         ):
             target_name, target_conf = target_raw, 1.0
 

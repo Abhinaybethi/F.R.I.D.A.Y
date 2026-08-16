@@ -19,10 +19,14 @@ from friday.utils.audit_logger import log_action
 
 logger = get_logger(__name__)
 
-# Basic secret filter to prevent storing obvious credentials
+# Basic secret filter to prevent storing obvious credentials, tokens, or PII
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(pass" + r"word|pass" + r"wd|pw" + r"d|sec" + r"ret|api" + r"_key|api" + r"key|to" + r"ken)[\s=:]*[\"']?[a-zA-Z0-9_\-\.]{8,}"),
-    re.compile(r"(?i)s" + r"k-[a-zA-Z0-9]{32,}"),  # OpenAI-style key
+    re.compile(r"(?i)s" + r"k-[a-zA-Z0-9]{32,}"),       # OpenAI-style key
+    re.compile(r"(?i)ghp_[a-zA-Z0-9]{36}"),            # GitHub Personal Access Token
+    re.compile(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{16,}"),  # Bearer authentication header
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),              # US Social Security Number (SSN)
+    re.compile(r"\b(?:\d[ -]*?){13,16}\b"),             # Credit Card Number (13-16 digits)
 ]
 
 def _get_db_path() -> str:

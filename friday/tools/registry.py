@@ -212,6 +212,18 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
     if action == Action.FORGET:
         return memory.forget(target, dry_run=is_dry_run)
 
+    if action == Action.SET_VOLUME:
+        return system.set_volume(target, dry_run=is_dry_run)
+
+    if action == Action.MUTE_AUDIO:
+        return system.mute_audio(dry_run=is_dry_run)
+
+    if action == Action.UNMUTE_AUDIO:
+        return system.unmute_audio(dry_run=is_dry_run)
+
+    if action == Action.PAUSE_MEDIA:
+        return system.pause_media(dry_run=is_dry_run)
+
     return {"success": False, "message": f"No tool registered for action: {action.name}"}
 
 
@@ -229,4 +241,8 @@ _DEFAULT_PERMISSIONS: dict = {
     "remember":     True,
     "recall":       True,
     "forget":       True,
+    "set_volume":   True,
+    "mute_audio":   True,
+    "unmute_audio": True,
+    "pause_media":  True,
 }

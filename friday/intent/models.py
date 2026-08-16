@@ -23,6 +23,10 @@ class Action(Enum):
     REMEMBER      = auto()
     RECALL        = auto()
     FORGET        = auto()
+    SET_VOLUME    = auto()
+    MUTE_AUDIO    = auto()
+    UNMUTE_AUDIO  = auto()
+    PAUSE_MEDIA   = auto()
     UNKNOWN       = auto()
 
 

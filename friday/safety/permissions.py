@@ -32,6 +32,10 @@ _ACTION_PERMISSION_KEY: dict[Action, str] = {
     Action.REMEMBER:        "remember",
     Action.RECALL:          "recall",
     Action.FORGET:          "forget",
+    Action.SET_VOLUME:      "set_volume",
+    Action.MUTE_AUDIO:      "mute_audio",
+    Action.UNMUTE_AUDIO:    "unmute_audio",
+    Action.PAUSE_MEDIA:     "pause_media",
 }
 
 

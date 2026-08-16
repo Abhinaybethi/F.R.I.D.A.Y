@@ -41,7 +41,7 @@ def resolve_context(transcript: str, context: ShortTermContext) -> tuple[str, st
     Returns:
         (resolved_transcript, error_message)
     """
-    text = transcript.lower().strip()
+    text = transcript.lower().strip().rstrip(".!?").strip()
 
     if not text:
         return text, ""

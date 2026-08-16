@@ -132,6 +132,14 @@ def open_website(name: str, dry_run: bool = True) -> dict:
     url = _WEBSITE_URLS.get(name_lower)
 
     if not url:
+        if ":" in name_clean:
+            parsed_scheme = urlparse(name_clean).scheme.lower()
+            if parsed_scheme and parsed_scheme not in ("http", "https"):
+                return {
+                    "success": False,
+                    "message": f"Blocked scheme {parsed_scheme!r}. Only http and https are allowed.",
+                    "spoken_message": "I cannot access that website due to security restrictions."
+                }
         if name_lower.startswith("http://") or name_lower.startswith("https://"):
             parsed = urlparse(name_clean)
             hostname = (parsed.hostname or "").lower()

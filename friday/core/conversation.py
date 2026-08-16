@@ -102,6 +102,14 @@ class ConversationManager:
 
     @property
     def state(self) -> ConversationState:
+        if self.state_machine.current_state == ConversationState.WAITING_FOR_CONFIRMATION:
+            if self.context.confirmation_start_time > 0 and (time.time() - self.context.confirmation_start_time > 30.0):
+                logger.info("Confirmation timeout expired. Auto-reverting state to LISTENING.")
+                self.context.pending_intent = None
+                if self.context.current_plan:
+                    self.context.current_plan.state = PlanState.CANCELLED
+                    self.context.current_plan = None
+                self.state_machine.transition_to(ConversationState.LISTENING)
         return self.state_machine.current_state
 
     def start_session(self):
@@ -526,9 +534,9 @@ class ConversationManager:
         if policy == Policy.CONFIRM:
             if self.context.current_goal:
                 self.context.current_goal.state = GoalState.WAITING_FOR_USER
-            self.state_machine.transition_to(ConversationState.WAITING_FOR_CONFIRMATION)
             self.context.pending_intent = intent
             self.context.confirmation_start_time = time.time()
+            self.state_machine.transition_to(ConversationState.WAITING_FOR_CONFIRMATION)
             prompt = format_confirmation_prompt(intent)
             self.context.last_response = prompt
             return prompt, True
@@ -539,6 +547,7 @@ class ConversationManager:
             intent,
             dry_run=self.dry_run,
             allow_real_execution=self.allow_real_execution,
+            permissions=self.permissions,
         )
 
         if result:

@@ -127,6 +127,18 @@ def close_app(name: str, dry_run: bool = True) -> dict:
 
     target_procs = [p.lower() for p in _PROCESS_NAMES[name]]
     closed = []
+
+    # Attempt graceful window close first on Windows
+    for proc_name in target_procs:
+        stem = proc_name.rsplit(".", 1)[0]
+        try:
+            cmd = f"Get-Process -Name '{stem}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.CloseMainWindow() }}"
+            subprocess.run(["powershell", "-Command", cmd], capture_output=True, timeout=2.0)
+        except Exception:
+            pass
+
+    time.sleep(0.2)
+
     for proc in psutil.process_iter(["name"]):
         if proc.info["name"] and proc.info["name"].lower() in target_procs:
             try:
