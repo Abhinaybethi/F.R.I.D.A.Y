@@ -1,5 +1,5 @@
-"""
-UNIT TEST — Failure Mode Recovery Suite
+﻿"""
+UNIT TEST â€” Failure Mode Recovery Suite
 ========================================
 Tests fail-closed recovery behavior for Ollama offline, malformed JSON,
 tool exceptions, verification failure, confirmation rejection, and step failure.
@@ -26,7 +26,7 @@ _ALL_ENABLED = {
 def test_ollama_offline_recovery():
     """When Ollama is unavailable, unknown transcripts fail closed to safe error message."""
     class OfflineReasoner(Reasoner):
-        def request(self, transcript: str, context: ShortTermContext) -> dict:
+        def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
             raise RuntimeError("Ollama connection refused")
         def is_available(self) -> bool:
             return False
@@ -46,7 +46,7 @@ def test_ollama_offline_recovery():
 def test_malformed_llm_json_recovery():
     """When Ollama returns malformed JSON, system fails closed to safe error message."""
     class BadJsonReasoner(Reasoner):
-        def request(self, transcript: str, context: ShortTermContext) -> dict:
+        def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
             return {"type": "unknown", "raw": "invalid_json"}
         def is_available(self) -> bool:
             return True

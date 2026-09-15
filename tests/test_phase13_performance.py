@@ -1,5 +1,5 @@
-"""
-UNIT TEST — Phase 13 Performance Suite (P0)
+﻿"""
+UNIT TEST â€” Phase 13 Performance Suite (P0)
 =============================================
 Tests fuzzy router and context resolution speed and zero Ollama calls for near-miss STT transcriptions.
 No Ollama required. All deterministic.
@@ -25,7 +25,7 @@ _ALL_ENABLED = {
 class MockCallCountingReasoner(Reasoner):
     def __init__(self):
         self.call_count = 0
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         self.call_count += 1
         return {"type": "unknown"}
     def is_available(self) -> bool:

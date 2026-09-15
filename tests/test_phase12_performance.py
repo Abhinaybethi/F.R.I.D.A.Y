@@ -1,5 +1,5 @@
-"""
-UNIT TEST — Phase 12 Performance Regression Suite
+﻿"""
+UNIT TEST â€” Phase 12 Performance Regression Suite
 ===================================================
 Proves that known deterministic commands and system intents NEVER call Ollama.
 Tracks Ollama invocation counts and verifies sub-millisecond routing latency.
@@ -24,7 +24,7 @@ _ALL_ENABLED = {
 class MockCallCountingReasoner(Reasoner):
     def __init__(self):
         self.call_count = 0
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         self.call_count += 1
         return {"type": "unknown"}
     def is_available(self) -> bool:

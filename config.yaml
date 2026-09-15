@@ -4,12 +4,12 @@
 wake_word: "friday"
 
 security:
-  dry_run: true
-  allow_real_execution: false
+  dry_run: false
+  allow_real_execution: true
 
 tools:
-  dry_run: true        # Backward compatibility key
-  allow_real_execution: false
+  dry_run: false        # Backward compatibility key
+  allow_real_execution: true
   permissions:
     open_app: true
     close_app: true
@@ -22,9 +22,13 @@ tools:
     minimize_app: true
     maximize_app: true
     take_screenshot: true
+    play_video: true
+    greeting: true
 
 voice:
   offline_only: true
+  wake_word_required: true   # true = wake-gated (IDLE ignores non-wake speech); false = hands-free
+  conversation_timeout_seconds: 300   # active-session inactivity timeout (180–300s); wake required again after expiry
   debug:
     save_audio: false
     directory: debug_audio
@@ -60,8 +64,15 @@ brain:
   ollama_model: "llama3:latest"
 
 reasoning:
-  model: "llama3:latest"
-  endpoint: "http://localhost:11434/api/generate"
+  provider: "llamacpp"
+  model: 'C:\AI\models\Bonsai-8B-Q1_0.gguf'
+  endpoint: "http://127.0.0.1:8080"
+  timeout: 30
+  server:
+    auto_start: true
+    executable: "llama-server"
+    context_size: 2048
+    startup_timeout: 60
 
 logging:
   level: "INFO"

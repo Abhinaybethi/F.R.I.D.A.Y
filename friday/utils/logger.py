@@ -26,6 +26,7 @@ def get_logger(name: str, log_file: str = "logs/friday.log", level: str = "INFO"
         return logger  # already configured, avoid duplicate handlers
 
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    logger.propagate = False  # prevent duplicate logs via parent logger propagation
 
     formatter = logging.Formatter(
         "%(asctime)s | %(name)s | %(levelname)s | [%(request_id)s] | %(message)s"

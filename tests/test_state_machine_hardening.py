@@ -1,5 +1,5 @@
-"""
-UNIT TEST — State Machine Hardening & Resource Safety (Phase 16 P0)
+﻿"""
+UNIT TEST â€” State Machine Hardening & Resource Safety (Phase 16 P0)
 ====================================================================
 Tests state machine transitions under barge-in, cancellation, stops, exceptions,
 and audio resource cleanup.
@@ -24,7 +24,7 @@ _ALL_ENABLED = {
 
 
 class ExceptionThrowingReasoner(Reasoner):
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         raise RuntimeError("Simulated Ollama Timeout / Exception")
     def is_available(self) -> bool:
         return True

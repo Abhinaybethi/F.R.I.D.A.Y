@@ -2,7 +2,7 @@
 UNIT TEST — System Health Diagnostics
 ======================================
 Tests friday/utils/health_diagnostics.py in isolation.
-No Ollama required.
+No local LLM server required.
 """
 import sys
 import os
@@ -23,7 +23,7 @@ def test_check_system_health_structure():
     assert "vad" in comps
     assert "stt" in comps
     assert "tts" in comps
-    assert "ollama" in comps
+    assert "reasoning" in comps
 
     assert comps["config"]["status"] in ("PASS", "FAIL")
 

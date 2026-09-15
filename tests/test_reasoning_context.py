@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -11,7 +11,7 @@ def test_context_passed_to_reasoner(monkeypatch):
     
     class MockReasoner:
         def is_available(self): return True
-        def request(self, transcript, context):
+        def request(self, transcript, context, mode="action"):
             nonlocal called_context
             called_context = context
             return {"type": "response", "text": "OK"}

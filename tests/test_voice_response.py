@@ -34,7 +34,7 @@ def test_voice_response():
 
     print("\n[Test 2] 'open chrome'")
     handle("open chrome")
-    assert tts.spoken[-1] == "Opening Chrome.", f"Unexpected TTS output: {tts.spoken[-1]}"
+    assert tts.spoken[-1] == "Would open Chrome.", f"Unexpected TTS output: {tts.spoken[-1]}"
 
     print("\n[Test 3] 'open groom' (confirmation)")
     handle("open groom")
@@ -42,7 +42,7 @@ def test_voice_response():
 
     print("\n[Test 4] 'yes' (execution)")
     handle("yes")
-    assert tts.spoken[-1] == "Opening Chrome.", f"Unexpected TTS output: {tts.spoken[-1]}"
+    assert tts.spoken[-1] == "Would open Chrome.", f"Unexpected TTS output: {tts.spoken[-1]}"
 
     print("\n[Test 5] 'open groom' again for cancel test")
     handle("open groom")

@@ -175,7 +175,7 @@ class VoiceSessionManager:
         )
         wait_frames = 0
 
-        logger.info("WAITING_FOR_SPEECH")
+        logger.info("[VOICE] WAITING_FOR_SPEECH")
 
         for chunk in self.audio.read_chunks():
             # -- pre-speech timeout (stop waiting if nobody speaks) --
@@ -188,7 +188,7 @@ class VoiceSessionManager:
 
             if speech_detected:
                 if not is_speech:
-                    logger.info("LISTENING")
+                    logger.info("[VOICE] Speech detected — LISTENING")
                     is_speech = True
                     speech_start_frame = wait_frames
                 silence_frames = 0
@@ -205,7 +205,7 @@ class VoiceSessionManager:
         if not buffer:
             return ""
 
-        logger.info("TRANSCRIBING")
+        logger.info("[VOICE] TRANSCRIBING")
         audio_data = np.concatenate(buffer)
         audio_sec = len(audio_data) / self.audio.sample_rate
 
@@ -224,12 +224,13 @@ class VoiceSessionManager:
 
         text, rtf = self.stt.transcribe(audio_data)
         logger.info(
-            "TEXT_READY | audio=%.1fs RTF=%.2f | %s",
-            audio_sec, rtf, repr(text),
+            "[STT] Transcription complete: %r | audio=%.1fs RTF=%.2f",
+            text, audio_sec, rtf,
         )
 
         # VAD fired, but Whisper produced nothing legible
         if not text:
             return _NO_SPEECH
 
+        logger.info("[VOICE] Sending transcript to assistant: %r", text)
         return text

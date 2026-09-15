@@ -4,7 +4,6 @@ System Health & Runtime Diagnostics Subsystem for F.R.I.D.A.Y. Phase 10.
 Provides comprehensive diagnostic checks across all voice, safety, tool, and reasoning layers.
 """
 import os
-import urllib.request
 import yaml
 from pathlib import Path
 
@@ -27,7 +26,7 @@ def check_system_health(config_path: str = "config.yaml") -> dict:
                 "vad": {"status": "PASS"|"FAIL", "details": ...},
                 "stt": {"status": "PASS"|"FAIL", "details": ...},
                 "tts": {"status": "PASS"|"FAIL", "details": ...},
-                "ollama": {"status": "PASS"|"FAIL", "details": ...},
+                "reasoning": {"status": "PASS"|"FAIL", "details": ...},
             }
         }
     """
@@ -93,16 +92,35 @@ def check_system_health(config_path: str = "config.yaml") -> dict:
         results["tts"] = {"status": "FAIL", "details": str(e)}
         overall_pass = False
 
-    # 6. Ollama Reasoning Layer Check
+    # 6. Reasoning Layer Check
     try:
-        req = urllib.request.Request("http://localhost:11434/", method="GET")
-        with urllib.request.urlopen(req, timeout=1.0) as resp:
-            if resp.status == 200:
-                results["ollama"] = {"status": "PASS", "details": "Ollama server reachable at http://localhost:11434"}
-            else:
-                results["ollama"] = {"status": "FAIL", "details": f"Ollama HTTP status {resp.status}"}
+        if Path(config_path).exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw_cfg = yaml.safe_load(f) or {}
+            _, cfg, _ = validate_config(raw_cfg)
+            reasoning_cfg = cfg.get("reasoning", {})
+        else:
+            reasoning_cfg = {}
+        provider = reasoning_cfg.get("provider", "llamacpp")
+        if provider == "ollama":
+            from friday.reasoning.local_reasoner import OllamaReasoner
+            reasoner = OllamaReasoner(
+                endpoint=reasoning_cfg.get("endpoint", "http://localhost:11434/api/generate"),
+                model=reasoning_cfg.get("model", "llama3:latest"),
+            )
+        else:
+            from friday.reasoning.llamacpp_reasoner import LlamaCppReasoner
+            reasoner = LlamaCppReasoner(
+                base_url=reasoning_cfg.get("endpoint", "http://127.0.0.1:8080"),
+                model=reasoning_cfg.get("model", "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"),
+                timeout=float(reasoning_cfg.get("timeout", 30)),
+            )
+        if reasoner.is_available():
+            results["reasoning"] = {"status": "PASS", "details": reasoner.health()}
+        else:
+            results["reasoning"] = {"status": "FAIL", "details": reasoner.health()}
     except Exception as e:
-        results["ollama"] = {"status": "FAIL", "details": f"Ollama unreachable: {e}"}
+        results["reasoning"] = {"status": "FAIL", "details": f"Reasoning provider unreachable: {e}"}
 
     return {
         "overall_status": "PASS" if overall_pass else "DEGRADED",

@@ -10,6 +10,7 @@ Phase 9 additions:
   - ActionOutcome provides dict-indexing (__getitem__, get) for 100% backward compatibility
 """
 import time
+from typing import Optional
 
 from friday.intent.models import Action, Intent
 from friday.safety.permissions import check_permission, PermissionResult
@@ -26,6 +27,9 @@ from friday.verification.models import (
 )
 from friday.verification.verifier import verify_execution
 from friday.verification.formatter import format_outcome
+from friday.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 _RELEASE_TEST_WHITELIST: set[tuple[Action, str]] = {
@@ -111,10 +115,12 @@ def execute(
 
     # Tool Execution
     t_exec_0 = time.perf_counter()
-    raw_result = _dispatch(a, t, is_dry_run)
+    logger.info("[TOOL] Executing: %s(%r) [%s]", a.name, t, execution_mode)
+    raw_result = _dispatch(a, t, is_dry_run, intent=intent)
     exec_latency = (time.perf_counter() - t_exec_0) * 1000
 
     exec_success = raw_result.get("success", False)
+    logger.info("[TOOL] Finished: success=%s", exec_success)
     exec_status = ExecutionStatus.SUCCESS if exec_success else ExecutionStatus.FAILED
     exec_msg = raw_result.get("message", "Done." if exec_success else "Execution failed.")
     exec_spoken = raw_result.get("spoken_message", "")
@@ -162,7 +168,7 @@ def execute(
     return outcome
 
 
-def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
+def _dispatch(action: Action, target: str, is_dry_run: bool, intent: Optional[Intent] = None) -> dict:
     """Pure dispatch table — no policy logic here."""
     if action == Action.OPEN_APP:
         return apps.open_app(target, dry_run=is_dry_run)
@@ -178,6 +184,12 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
 
     if action == Action.SEARCH_WEB:
         return browser.search_web(target, dry_run=is_dry_run)
+
+    if action == Action.PLAY_VIDEO:
+        return browser.play_youtube(target, dry_run=is_dry_run)
+
+    if action == Action.GREETING:
+        return {"success": True, "message": "Hello! How can I assist you today?", "spoken_message": "Hello! How can I assist you today?"}
 
     if action == Action.FIND_FILE:
         return files.find_file(target)         # read-only, no dry_run needed
@@ -204,7 +216,10 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
         return desktop.take_screenshot(target, dry_run=is_dry_run)
 
     if action == Action.REMEMBER:
-        return memory.remember(target, dry_run=is_dry_run)
+        args = getattr(intent, "arguments", {}) or {}
+        key_name = args.get("key_name")
+        category = args.get("category", "general")
+        return memory.remember(target, category=category, key_name=key_name, dry_run=is_dry_run)
 
     if action == Action.RECALL:
         return memory.recall(target)           # read-only, no dry_run needed
@@ -223,6 +238,12 @@ def _dispatch(action: Action, target: str, is_dry_run: bool) -> dict:
 
     if action == Action.PAUSE_MEDIA:
         return system.pause_media(dry_run=is_dry_run)
+
+    if action == Action.SYSTEM_STOP:
+        return {"success": True, "message": "Stopped.", "spoken_message": "Stopped."}
+
+    if action == Action.SYSTEM_CANCEL:
+        return {"success": True, "message": "Cancelled.", "spoken_message": "Cancelled."}
 
     return {"success": False, "message": f"No tool registered for action: {action.name}"}
 
@@ -245,4 +266,10 @@ _DEFAULT_PERMISSIONS: dict = {
     "mute_audio":   True,
     "unmute_audio": True,
     "pause_media":  True,
+    "play_video":   True,
+    "greeting":     True,
+    "system_stop":  True,
+    "system_cancel": True,
+    "system_help":  True,
+    "system_repeat": True,
 }

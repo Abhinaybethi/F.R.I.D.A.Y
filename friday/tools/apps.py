@@ -5,6 +5,7 @@ SAFETY REQUIREMENT:
   User speech → structured Intent → canonical app name → executable lookup.
   Raw transcript text NEVER reaches subprocess.
 """
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,8 +35,15 @@ _APP_EXECUTABLES: dict[str, list[str]] = {
         "firefox",
     ],
     "vscode": [
+        r"C:\Program Files\Microsoft VS Code\Code.exe",
         str(Path.home() / "AppData" / "Local" / "Programs" / "Microsoft VS Code" / "Code.exe"),
         "code",
+    ],
+    "brave": [
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        str(Path.home() / "AppData" / "Local" / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe"),
+        "brave",
     ],
     "notepad": ["notepad"],
     "explorer": ["explorer"],
@@ -47,6 +55,7 @@ _PROCESS_NAMES: dict[str, list[str]] = {
     "edge":     ["msedge.exe"],
     "firefox":  ["firefox.exe"],
     "vscode":   ["Code.exe"],
+    "brave":    ["brave.exe"],
     "notepad":  ["notepad.exe"],
     "explorer": ["explorer.exe"],
 }
@@ -57,6 +66,7 @@ _DISPLAY_NAMES: dict[str, str] = {
     "edge":     "Microsoft Edge",
     "firefox":  "Firefox",
     "vscode":   "VS Code",
+    "brave":    "Brave",
     "notepad":  "Notepad",
     "explorer": "File Explorer",
 }
@@ -77,7 +87,7 @@ def _find_executable(app_name: str) -> str | None:
 
 def open_app(name: str, dry_run: bool = True) -> dict:
     """
-    Open an application by canonical name.
+    Open an application by canonical name with duplicate launch protection.
 
     Args:
         name:    Canonical app name (from resolver).
@@ -89,16 +99,33 @@ def open_app(name: str, dry_run: bool = True) -> dict:
     display = _DISPLAY_NAMES.get(name, name.title())
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would open {display}.", "spoken_message": f"Opening {display}."}
+        msg = f"[DRY RUN] Would open {display}."
+        return {"success": True, "message": msg, "spoken_message": msg}
 
     exe = _find_executable(name)
     if not exe:
         return {"success": False, "message": f"Could not locate {display} on this system."}
 
+    # Duplicate process protection for desktop tools
     try:
-        subprocess.Popen([exe], close_fds=True)
+        import psutil
+        target_procs = [p.lower() for p in _PROCESS_NAMES.get(name, [])]
+        is_running = False
+        for proc in psutil.process_iter(["name"]):
+            pname = (proc.info.get("name") or "").lower()
+            if pname in target_procs:
+                is_running = True
+                break
+        if is_running and name in ("notepad", "explorer"):
+            logger.info("%s is already running. Reusing existing instance.", display)
+            return {"success": True, "message": f"Opening {display}.", "spoken_message": f"Opening {display}."}
+    except Exception:
+        pass
+
+    try:
+        os.startfile(exe)
         logger.info("Opened %s (%s)", display, exe)
-        return {"success": True, "message": f"Opening {display}.", "spoken_message": f"Opening {display}."}
+        return {"success": True, "message": f"Opening {display} from {exe}.", "spoken_message": f"Opening {display}."}
     except Exception as e:
         logger.error("Failed to open %s: %s", display, e)
         return {"success": False, "message": f"Failed to open {display}: {e}", "spoken_message": f"I couldn't open {display}."}
@@ -106,7 +133,7 @@ def open_app(name: str, dry_run: bool = True) -> dict:
 
 def close_app(name: str, dry_run: bool = True) -> dict:
     """
-    Close an application by canonical name.
+    Close an application by canonical name (idempotent).
 
     Args:
         name:    Canonical app name (from resolver).
@@ -118,7 +145,8 @@ def close_app(name: str, dry_run: bool = True) -> dict:
     display = _DISPLAY_NAMES.get(name, name.title())
 
     if dry_run:
-        return {"success": True, "message": f"[DRY RUN] Would close {display}.", "spoken_message": f"Closing {display}."}
+        msg = f"[DRY RUN] Would close {display}."
+        return {"success": True, "message": msg, "spoken_message": msg}
 
     try:
         import psutil
@@ -137,12 +165,22 @@ def close_app(name: str, dry_run: bool = True) -> dict:
         except Exception:
             pass
 
-    time.sleep(0.2)
+    time_module = None
+    try:
+        import time as time_module
+        time_module.sleep(0.2)
+    except Exception:
+        pass
 
     for proc in psutil.process_iter(["name"]):
         if proc.info["name"] and proc.info["name"].lower() in target_procs:
             try:
                 proc.terminate()
+                try:
+                    proc.wait(timeout=0.5)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=0.5)
                 closed.append(proc.info["name"])
             except Exception:
                 pass
@@ -150,4 +188,4 @@ def close_app(name: str, dry_run: bool = True) -> dict:
     if closed:
         logger.info("Closed %s (%s)", display, closed)
         return {"success": True, "message": f"Closed {display}.", "spoken_message": f"Closed {display}."}
-    return {"success": False, "message": f"{display} does not appear to be running.", "spoken_message": f"{display} doesn't seem to be running."}
+    return {"success": True, "message": f"{display} is not running.", "spoken_message": f"{display} is already closed."}

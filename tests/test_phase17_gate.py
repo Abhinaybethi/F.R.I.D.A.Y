@@ -47,7 +47,11 @@ def test_gate1_canonical_entrypoint():
 # Gate 2 — CLI diagnostics command
 def test_gate2_cli_diagnostics():
     from main import run_diagnostics
-    ok = run_diagnostics()
+    from unittest.mock import patch, MagicMock
+    mock_reasoner = MagicMock()
+    mock_reasoner.is_available.return_value = True
+    with patch("main._make_reasoner", return_value=mock_reasoner):
+        ok = run_diagnostics()
     assert ok is True
     print("[OK] Gate 2: CLI diagnostics command executed cleanly")
 

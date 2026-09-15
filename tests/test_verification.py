@@ -103,8 +103,8 @@ def test_get_time_not_applicable():
     assert v_res.status == VerificationStatus.NOT_APPLICABLE
 
 
-def test_find_file_not_applicable():
-    """FIND_FILE verification status is NOT_APPLICABLE."""
+def test_find_file_verification():
+    """FIND_FILE verification status returns VERIFIED_SUCCESS on valid search result."""
     intent = Intent(action=Action.FIND_FILE, target="test")
     exec_res = ExecutionResult(
         action=Action.FIND_FILE,
@@ -113,7 +113,7 @@ def test_find_file_not_applicable():
         message="Found 1 file.",
     )
     v_res = verify_execution(intent, exec_res, is_dry_run=False)
-    assert v_res.status == VerificationStatus.NOT_APPLICABLE
+    assert v_res.status == VerificationStatus.VERIFIED_SUCCESS
 
 
 def test_unknown_action_verifier_fallback():

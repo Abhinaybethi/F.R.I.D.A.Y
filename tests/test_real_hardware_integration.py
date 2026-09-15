@@ -2,7 +2,7 @@
 INTEGRATION TEST — Real Hardware & Voice System Integration
 ============================================================
 Programmatic validation of real microphone device settings,
-Silero VAD, faster-whisper STT, Piper TTS, and Ollama server.
+Silero VAD, faster-whisper STT, Piper TTS, and the reasoning provider.
 """
 import sys
 import os
@@ -21,7 +21,7 @@ def test_hardware_health_diagnostics():
     assert "vad" in comps
     assert "stt" in comps
     assert "tts" in comps
-    assert "ollama" in comps
+    assert "reasoning" in comps
     assert comps["config"]["status"] == "PASS"
 
 

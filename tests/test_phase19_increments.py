@@ -86,11 +86,11 @@ def test_structured_spoken_responses_dry_run():
     
     assert outcome.final_status == FinalStatus.DRY_RUN
     assert outcome.user_message == "[DRY RUN] Would open Chrome."
-    assert outcome.spoken_message == "Opening Chrome."
+    assert outcome.spoken_message == "[DRY RUN] Would open Chrome."
     
     # Test dict-like backwards compat
-    assert outcome["spoken_message"] == "Opening Chrome."
-    assert outcome.get("spoken_message") == "Opening Chrome."
+    assert outcome["spoken_message"] == "[DRY RUN] Would open Chrome."
+    assert outcome.get("spoken_message") == "[DRY RUN] Would open Chrome."
 
 # --- INCREMENT 5: Reasoner Gating ---
 def test_reasoner_gating_bypassed_for_simple_conversational():

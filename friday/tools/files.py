@@ -118,22 +118,28 @@ def find_file(query: str) -> dict:
     if implied_type:
         clean_query = clean_query.replace(implied_type, "")
     clean_query = clean_query.strip()
+    query_tokens = [tok for tok in re.split(r"\W+", clean_query) if tok]
 
     candidates = []
 
-    def _search_dir(dir_path: str, depth: int = 0):
+    def _search_dir(dir_name: str, dir_path: Path, depth: int = 0):
         if depth > 3:  # limit depth for speed
             return
         try:
-            for entry in os.scandir(dir_path):
+            for entry in os.scandir(str(dir_path)):
                 if entry.name.startswith(".") or entry.name in ("node_modules", "venv", ".venv", "__pycache__", "build", "dist"):
                     continue
                 if entry.is_file():
+                    fname_lower = entry.name.lower()
+                    stem_lower = Path(entry.name).stem.lower()
+
                     match = True
-                    if implied_type and not entry.name.lower().endswith(f".{implied_type}"):
+                    if implied_type and not fname_lower.endswith(f".{implied_type}"):
                         match = False
-                    if clean_query and clean_query not in entry.name.lower():
-                        match = False
+                    if clean_query and clean_query not in fname_lower:
+                        # Allow partial token match if not all tokens match
+                        if query_tokens and not any(tok in fname_lower for tok in query_tokens):
+                            match = False
 
                     if match:
                         try:
@@ -141,24 +147,48 @@ def find_file(query: str) -> dict:
                             if not _is_path_inside_safe_roots(p):
                                 continue
                             stat = entry.stat()
+                            
+                            # Multi-criteria scoring
+                            score = 0.0
+                            if clean_query and clean_query == stem_lower:
+                                score += 100.0
+                            elif clean_query and clean_query in fname_lower:
+                                score += 50.0
+
+                            for tok in query_tokens:
+                                if tok == stem_lower:
+                                    score += 40.0
+                                elif tok in fname_lower:
+                                    score += 20.0
+
+                            if implied_type and fname_lower.endswith(f".{implied_type}"):
+                                score += 30.0
+
+                            # Directory preference
+                            if dir_name in ("desktop", "documents"):
+                                score += 10.0
+                            elif dir_name == "downloads":
+                                score += 5.0
+
                             candidates.append({
                                 "path": str(p.resolve()),
                                 "name": entry.name,
-                                "mtime": stat.st_mtime
+                                "mtime": stat.st_mtime,
+                                "score": score,
                             })
                         except Exception:
                             pass
                 elif entry.is_dir():
-                    _search_dir(entry.path, depth + 1)
+                    _search_dir(dir_name, Path(entry.path), depth + 1)
         except PermissionError:
             pass
 
     for dir_name, dir_path in _SAFE_DIRS.items():
         if dir_path.exists():
-            _search_dir(str(dir_path))
+            _search_dir(dir_name, dir_path)
 
-    # Sort by mtime descending (newest first)
-    candidates.sort(key=lambda x: x["mtime"], reverse=True)
+    # Sort by score descending, then mtime descending
+    candidates.sort(key=lambda x: (x["score"], x["mtime"]), reverse=True)
     results = [c["path"] for c in candidates[:_MAX_RESULTS]]
 
     logger.info("find_file(%r): %d candidate(s)", query, len(results))

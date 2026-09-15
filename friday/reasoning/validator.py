@@ -1,7 +1,28 @@
 """
 Strict JSON schema validator for the reasoning layer.
+
+Reasoner-produced actions are restricted to a SAFE tool allowlist.
+The reasoning model can never invoke destructive / state-changing system
+actions (close apps, forget memories, stop the assistant, volume, etc.)
+directly — those must stay deterministic-only via the router.
 """
 from friday.intent.models import Action
+
+# Actions the reasoning model may request. Anything else is rejected —
+# the model never gets to execute arbitrary tool calls.
+_REASONER_SAFE_ACTIONS = {
+    Action.OPEN_APP,
+    Action.OPEN_WEBSITE,
+    Action.READ_WEBSITE,
+    Action.SEARCH_WEB,
+    Action.PLAY_VIDEO,
+    Action.OPEN_FILE,
+    Action.OPEN_FOLDER,
+    Action.FIND_FILE,
+    Action.GET_TIME,
+    Action.GREETING,
+}
+
 
 def validate_reasoning_output(data: dict) -> dict:
     """
@@ -30,6 +51,10 @@ def validate_reasoning_output(data: dict) -> dict:
             return False
         action = step.get("action")
         if action not in valid_actions:
+            return False
+        # Tool allowlist: the model can only request safe actions
+        action_enum = Action[action]
+        if action_enum not in _REASONER_SAFE_ACTIONS:
             return False
         if not isinstance(step.get("target", ""), str):
             return False

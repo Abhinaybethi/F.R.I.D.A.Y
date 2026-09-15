@@ -87,49 +87,54 @@ def remember(content: str, category: str = "general", key_name: Optional[str] = 
             "spoken_message": "I cannot save that. It looks like sensitive information."
         }
 
-    # Deduplication check: compare normalized text (case & whitespace invariant)
-    norm_content = " ".join(content.lower().split())
-
-    try:
-        with closing(sqlite3.connect(_get_db_path())) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, content FROM memories")
-            rows = cursor.fetchall()
-            for (existing_id, existing_content) in rows:
-                norm_existing = " ".join(existing_content.lower().split())
-                if norm_existing == norm_content:
-                    return {
-                        "success": True,
-                        "message": f"Memory already exists: {existing_content}",
-                        "duplicate": True,
-                        "spoken_message": "I already remember that."
-                    }
-    except Exception as e:
-        logger.error(f"Failed to check duplicate memory: {e}")
-
     is_update = False
     if not dry_run:
         try:
             with closing(sqlite3.connect(_get_db_path())) as conn:
                 with conn:
+                    cursor = conn.cursor()
                     if key_name:
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT id FROM memories WHERE key_name = ?", (key_name,))
-                        existing = cursor.fetchone()
-                        if existing:
+                        cursor.execute("SELECT id, content FROM memories WHERE lower(key_name) = ?", (key_name.lower(),))
+                        existing_rows = cursor.fetchall()
+                        if existing_rows:
                             is_update = True
+                            first_id = existing_rows[0][0]
                             conn.execute(
-                                "UPDATE memories SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                                (content, category, existing[0])
+                                "UPDATE memories SET content = ?, category = ?, key_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (content, category, key_name, first_id)
                             )
+                            if len(existing_rows) > 1:
+                                conn.executemany("DELETE FROM memories WHERE id = ?", [(r[0],) for r in existing_rows[1:]])
                         else:
-                            conn.execute(
-                                "INSERT INTO memories (content, category, key_name) VALUES (?, ?, ?)",
-                                (content, category, key_name)
-                            )
+                            norm_content = " ".join(content.lower().split())
+                            cursor.execute("SELECT id, content FROM memories")
+                            rows = cursor.fetchall()
+                            dup_id = None
+                            for (e_id, e_content) in rows:
+                                if " ".join(e_content.lower().split()) == norm_content:
+                                    dup_id = e_id
+                                    break
+                            if dup_id:
+                                conn.execute("UPDATE memories SET key_name = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (key_name, category, dup_id))
+                            else:
+                                conn.execute(
+                                    "INSERT INTO memories (content, category, key_name, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                                    (content, category, key_name)
+                                )
                     else:
+                        norm_content = " ".join(content.lower().split())
+                        cursor.execute("SELECT id, content FROM memories")
+                        rows = cursor.fetchall()
+                        for (e_id, e_content) in rows:
+                            if " ".join(e_content.lower().split()) == norm_content:
+                                return {
+                                    "success": True,
+                                    "message": f"Memory already exists: {e_content}",
+                                    "duplicate": True,
+                                    "spoken_message": "I already remember that."
+                                }
                         conn.execute(
-                            "INSERT INTO memories (content, category, key_name) VALUES (?, ?, ?)",
+                            "INSERT INTO memories (content, category, key_name, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                             (content, category, key_name)
                         )
             log_action(
@@ -151,7 +156,7 @@ def remember(content: str, category: str = "general", key_name: Optional[str] = 
 
 
 def recall(query: str) -> Dict[str, Any]:
-    """Retrieve memories matching the query using keyword search."""
+    """Retrieve memories matching the query using preference key or keyword search."""
     if not query or not query.strip():
         return {"success": False, "message": "Nothing to recall.", "spoken_message": "I didn't catch what you wanted to recall."}
 
@@ -159,9 +164,25 @@ def recall(query: str) -> Dict[str, Any]:
     
     try:
         with closing(sqlite3.connect(_get_db_path())) as conn:
-            keywords = query.lower().split()
             cursor = conn.cursor()
-            cursor.execute("SELECT id, content FROM memories ORDER BY created_at DESC, id DESC")
+
+            # 1. Direct key match check first
+            clean_q = query.lower().replace("my ", "").replace("the ", "").strip()
+            cursor.execute(
+                "SELECT id, content, key_name FROM memories WHERE lower(key_name) = ? OR lower(key_name) = ? ORDER BY updated_at DESC, id DESC",
+                (query.lower(), clean_q)
+            )
+            key_row = cursor.fetchone()
+            if key_row:
+                return {
+                    "success": True,
+                    "message": f"Recalled: {key_row[1]}",
+                    "spoken_message": f"I remember that. {key_row[1]}"
+                }
+
+            # 2. Keyword relevance search ordered by latest update
+            keywords = query.lower().split()
+            cursor.execute("SELECT id, content FROM memories ORDER BY updated_at DESC, created_at DESC, id DESC")
             all_mems = cursor.fetchall()
             
             best_match = None
@@ -226,33 +247,30 @@ def forget(query: str, dry_run: bool = True) -> Dict[str, Any]:
         with closing(sqlite3.connect(_get_db_path())) as conn:
             cursor = conn.cursor()
             keywords = query.lower().split()
-            cursor.execute("SELECT id, content FROM memories")
+            cursor.execute("SELECT id, content, key_name FROM memories")
             all_mems = cursor.fetchall()
             
-            best_id = None
-            best_match = None
-            best_score = 0
+            matching_ids = []
+            deleted_contents = []
             
-            for mem_id, content in all_mems:
-                score = sum(1 for kw in keywords if kw in content.lower())
-                if score > best_score:
-                    best_score = score
-                    best_id = mem_id
-                    best_match = content
+            for mem_id, content, k_name in all_mems:
+                if (k_name and k_name.lower() == query.lower()) or (query.lower() in content.lower()) or any(kw in content.lower() for kw in keywords):
+                    matching_ids.append(mem_id)
+                    deleted_contents.append(content)
             
-            if best_id:
+            if matching_ids:
                 if not dry_run:
                     with conn:
-                        cursor.execute("DELETE FROM memories WHERE id = ?", (best_id,))
+                        cursor.executemany("DELETE FROM memories WHERE id = ?", [(i,) for i in matching_ids])
                     log_action(
-                        action="MEMORY_DELETE", target=best_match, permission="ALLOWED", 
-                        confirmation="N/A", execution="SUCCESS", verification="N/A", 
+                        action="MEMORY_DELETE", target=", ".join(deleted_contents), permission="ALLOWED",
+                        confirmation="N/A", execution="SUCCESS", verification="N/A",
                         final_status="SUCCESS", result="SUCCESS", latency_ms=0.0
                     )
                 
                 return {
                     "success": True,
-                    "message": f"Forgot: {best_match}",
+                    "message": f"Forgot: {', '.join(deleted_contents)}",
                     "spoken_message": "I have forgotten that."
                 }
             else:

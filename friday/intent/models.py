@@ -17,6 +17,8 @@ class Action(Enum):
     SYSTEM_CANCEL = auto()
     SYSTEM_HELP   = auto()
     SYSTEM_REPEAT = auto()
+    GREETING      = auto()
+    PLAY_VIDEO    = auto()
     MINIMIZE_APP   = auto()
     MAXIMIZE_APP   = auto()
     TAKE_SCREENSHOT = auto()

@@ -1,5 +1,5 @@
-"""
-UNIT TEST — Phase 14 Performance Suite (P0)
+﻿"""
+UNIT TEST â€” Phase 14 Performance Suite (P0)
 =============================================
 Tests deterministic core latency (< 0.50 ms) and 100% Ollama bypass for known commands.
 No Ollama required. All deterministic.
@@ -24,7 +24,7 @@ _ALL_ENABLED = {
 class MockCallCountingReasoner(Reasoner):
     def __init__(self):
         self.call_count = 0
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         self.call_count += 1
         return {"type": "unknown"}
     def is_available(self) -> bool:

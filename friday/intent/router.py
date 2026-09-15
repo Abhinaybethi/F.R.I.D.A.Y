@@ -34,7 +34,7 @@ _FOLDERS = r"(downloads?|documents?|desktop|pictures?|music|videos?)"
 # Action=None means "open something — resolve by target type"
 _PATTERNS: list[tuple[re.Pattern, callable]] = [
     # System Intents
-    (re.compile(r"^(?:stop|shut down|exit|quit|goodbye)$"),
+    (re.compile(r"^(?:stop|shut down|exit|quit|goodbye)(?:\s+(?:friday\s+)?speaking)?$"),
      lambda m: (Action.SYSTEM_STOP, "", 1.0)),
 
     (re.compile(r"^(?:cancel|never mind|nevermind|abort)$"),
@@ -45,6 +45,21 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
 
     (re.compile(r"^(?:repeat|say that again|pardon|what did you say)$"),
      lambda m: (Action.SYSTEM_REPEAT, "", 1.0)),
+
+    # Greeting — deterministic, no reasoner round-trip
+    (re.compile(r"^(?:hi|hello|hey|hiya|yo|good morning|good afternoon|good evening|gm|gn?|howdy)"
+                r"(?:[!.,\s]|there| friday| friday\.?)*$", re.IGNORECASE),
+     lambda m: (Action.GREETING, "", _HIGH)),
+
+    # YouTube / media — deterministic (never sent to reasoner)
+    (re.compile(r"^(?:play|watch)\s+(.+?)\s+on\s+(youtube|yt)$", re.IGNORECASE),
+     lambda m: (Action.PLAY_VIDEO, m.group(1).strip(), _HIGH)),
+
+    (re.compile(r"^(?:search\s+(?:for\s+)?(.+?)\s+on\s+(youtube|yt)|youtube\s+search\s+(.+))$", re.IGNORECASE),
+     lambda m: (Action.PLAY_VIDEO, (m.group(1) or m.group(3)).strip(), _MEDIUM)),
+
+    (re.compile(r"^play\s+(.+)$", re.IGNORECASE),
+     lambda m: (Action.PLAY_VIDEO, m.group(1).strip(), _MEDIUM)),
 
     # 1. GET_TIME — no target needed
     (re.compile(r"^what(?:s| is)?(?: the)? time(?:(?: is it)?(?: (?:right\s+)?now)?)?$|"
@@ -80,11 +95,11 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
      lambda m: (Action.READ_WEBSITE, m.group(1).strip(), _MEDIUM)),
 
     # MEMORY INTENTS
-    (re.compile(r"^(?:remember|memorize|save|note|keep in mind)(?:\s+(?:that|this))?\s+(.+)$"),
+    (re.compile(r"^(?:remember|memorize|save|note|keep in mind|update)(?:\s+(?:that|this|my))?\s+(.+)$"),
      lambda m: (Action.REMEMBER, m.group(1).strip(), _HIGH)),
 
-    (re.compile(r"^(?:recall|what is in my memory about|do you remember)\s+(.+)$"),
-     lambda m: (Action.RECALL, m.group(1).strip(), _MEDIUM)),
+    (re.compile(r"^(?:recall|do you remember|what is in my memory about|what is my|whats my|what's my)\s+(.+)$"),
+     lambda m: (Action.RECALL, m.group(1).strip(), _HIGH)),
 
     (re.compile(r"^(?:forget|erase my memory of|delete my memory of|remove from memory)\s+(.+)$"),
      lambda m: (Action.FORGET, m.group(1).strip(), _HIGH)),
@@ -159,6 +174,7 @@ def route(raw_text: str) -> Intent:
             continue
 
         action, target_raw, intent_conf = handler(m)
+        arguments = {}
 
         # --- resolve action and target ---
         if action is None:
@@ -173,13 +189,31 @@ def route(raw_text: str) -> Intent:
         elif action == Action.OPEN_WEBSITE:
             target_name, target_conf = resolve_website(target_raw)
 
+        elif action == Action.REMEMBER:
+            target_name = target_raw
+            target_conf = 1.0
+            arguments = {}
+            raw_lower = target_raw.lower()
+            if " to " in raw_lower:
+                parts = target_raw.split(" to ", 1)
+                key = parts[0].replace("my ", "").replace("the ", "").strip()
+                val = parts[1].strip()
+                target_name = f"my {key} is {val}"
+                arguments = {"key_name": key, "category": "preference"}
+            elif " is " in raw_lower:
+                parts = target_raw.split(" is ", 1)
+                key = parts[0].replace("my ", "").replace("the ", "").strip()
+                arguments = {"key_name": key, "category": "preference"}
+
         elif action in (
             Action.SEARCH_WEB, Action.FIND_FILE, Action.GET_TIME,
             Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
-            Action.REMEMBER, Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
-            Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA
+            Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
+            Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA,
+            Action.GREETING, Action.PLAY_VIDEO
         ):
             target_name, target_conf = target_raw, 1.0
+            arguments = {}
 
         elif action == Action.OPEN_FOLDER:
             # Normalize folder name (strip trailing 's' for "downloads" → "download")
@@ -194,6 +228,7 @@ def route(raw_text: str) -> Intent:
         return Intent(
             action=action,
             target=target_name,
+            arguments=arguments if "arguments" in locals() else {},
             intent_confidence=intent_conf,
             target_confidence=target_conf,
             confidence=conf,

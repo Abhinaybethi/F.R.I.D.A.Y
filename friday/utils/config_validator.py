@@ -26,6 +26,8 @@ VALID_PERMISSION_KEYS = {
     "minimize_app",
     "maximize_app",
     "take_screenshot",
+    "play_video",
+    "greeting",
 }
 
 
@@ -91,16 +93,83 @@ def validate_config(config: dict) -> Tuple[bool, dict, list[str]]:
 
     # 2. Reasoning Layer Validation
     reasoning = dict(sanitized.get("reasoning", {}))
-    endpoint = reasoning.get("endpoint", "http://localhost:11434/api/generate")
+
+    provider = reasoning.get("provider", "llamacpp")
+    if provider not in ("ollama", "llamacpp"):
+        messages.append(f"Invalid reasoning provider {provider!r}; defaulting to 'llamacpp'.")
+        provider = "llamacpp"
+    reasoning["provider"] = provider
+
+    if provider == "ollama":
+        default_endpoint = "http://localhost:11434/api/generate"
+        default_model = "llama3:latest"
+    else:
+        default_endpoint = "http://127.0.0.1:8080"
+        default_model = "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"
+
+    endpoint = reasoning.get("endpoint", default_endpoint)
     if not isinstance(endpoint, str) or not (endpoint.startswith("http://") or endpoint.startswith("https://")):
-        messages.append(f"Invalid reasoning endpoint URL {endpoint!r}; defaulting to http://localhost:11434/api/generate.")
-        reasoning["endpoint"] = "http://localhost:11434/api/generate"
+        messages.append(f"Invalid reasoning endpoint URL {endpoint!r}; defaulting to {default_endpoint}.")
+        reasoning["endpoint"] = default_endpoint
+    else:
+        reasoning["endpoint"] = endpoint
 
-    model = reasoning.get("model", "llama3:latest")
+    model = reasoning.get("model", default_model)
     if not isinstance(model, str) or not model.strip():
-        reasoning["model"] = "llama3:latest"
+        reasoning["model"] = default_model
 
+    timeout = reasoning.get("timeout", 30)
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        messages.append(f"Invalid reasoning timeout {timeout!r}; defaulting to 30.")
+        reasoning["timeout"] = 30
+    else:
+        reasoning["timeout"] = float(timeout)
+
+    # 2b. Reasoning server lifecycle settings
+    server = dict(reasoning.get("server", {}))
+    server.setdefault("auto_start", True)
+    server.setdefault("executable", "llama-server")
+    server.setdefault("context_size", 2048)
+    server.setdefault("startup_timeout", 60)
+
+    if not isinstance(server["auto_start"], bool):
+        messages.append(f"Invalid server.auto_start {server['auto_start']!r}; defaulting to True.")
+        server["auto_start"] = True
+    if not isinstance(server["executable"], str) or not server["executable"].strip():
+        server["executable"] = "llama-server"
+    if not isinstance(server["context_size"], int) or server["context_size"] <= 0:
+        server["context_size"] = 2048
+    if not isinstance(server["startup_timeout"], (int, float)) or server["startup_timeout"] <= 0:
+        server["startup_timeout"] = 60.0
+    else:
+        server["startup_timeout"] = float(server["startup_timeout"])
+
+    reasoning["server"] = server
     sanitized["reasoning"] = reasoning
+
+    # 3. Voice Layer Validation (active-session / wake-gate settings)
+    voice = dict(sanitized.get("voice", {}))
+
+    raw_wake_required = voice.get("wake_word_required", True)
+    if not isinstance(raw_wake_required, bool):
+        messages.append(f"Invalid voice.wake_word_required {raw_wake_required!r}; defaulting to True.")
+        voice["wake_word_required"] = True
+    else:
+        voice["wake_word_required"] = raw_wake_required
+
+    raw_timeout = voice.get("conversation_timeout_seconds", 300)
+    if not isinstance(raw_timeout, (int, float)) or raw_timeout <= 0:
+        messages.append(f"Invalid voice.conversation_timeout_seconds {raw_timeout!r}; defaulting to 300.")
+        voice["conversation_timeout_seconds"] = 300
+    else:
+        # Clamp to the supported 180–300s inactivity window.
+        voice["conversation_timeout_seconds"] = int(max(180, min(300, int(raw_timeout))))
+        if int(raw_timeout) != voice["conversation_timeout_seconds"]:
+            messages.append(
+                f"voice.conversation_timeout_seconds clamped to {voice['conversation_timeout_seconds']}s (supported range 180–300)."
+            )
+
+    sanitized["voice"] = voice
 
     # Log any configuration sanitization messages
     for msg in messages:

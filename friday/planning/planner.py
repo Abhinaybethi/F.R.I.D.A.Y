@@ -21,9 +21,11 @@ def parse_plan(transcript: str, context: ShortTermContext) -> tuple[Optional[Act
     parts = []
     for part in transcript.split(" and "):
         for subpart in part.split(" then "):
-            if subpart.strip():
-                parts.append(subpart.strip())
-                
+            for piece in subpart.split(";"):
+                for chunk in piece.split(", "):
+                    if chunk.strip():
+                        parts.append(chunk.strip())
+
     if len(parts) > MAX_STEPS:
         return None, "I can only perform up to five actions in one plan."
         

@@ -18,11 +18,15 @@ class WakeWordListener:
         self.session = session
         self.wake_word = wake_word.lower()
 
-    def wait_for_wake_word(self):
-        """Blocks until the wake word is heard, then returns."""
-        logger.info("Listening for wake word '%s'...", self.wake_word)
+    def wait_for_wake_word(self) -> str:
+        """Blocks until speech containing the wake word is heard, then returns the transcript."""
+        logger.info("[WAKE] Listening for wake word '%s'...", self.wake_word)
         while True:
             text = self.session.listen_once()
-            if text and self.wake_word in text:
-                logger.info("Wake word detected.")
-                return
+            if not text:
+                continue
+            if self.wake_word in text.lower():
+                logger.info("[WAKE] Wake word detected in: %r", text)
+                return text
+            logger.info("[WAKE] Heard (no wake word, still listening): %r", text)
+

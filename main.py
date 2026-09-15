@@ -22,6 +22,23 @@ from friday.utils.config_validator import validate_config
 logger = get_logger(__name__)
 
 
+def _make_reasoner(reasoning_cfg: dict):
+    """Build the configured local reasoning provider (ollama or llamacpp)."""
+    provider = reasoning_cfg.get("provider", "llamacpp")
+    if provider == "ollama":
+        from friday.reasoning.local_reasoner import OllamaReasoner
+        return OllamaReasoner(
+            endpoint=reasoning_cfg.get("endpoint", "http://localhost:11434/api/generate"),
+            model=reasoning_cfg.get("model", "llama3:latest"),
+        )
+    from friday.reasoning.llamacpp_reasoner import LlamaCppReasoner
+    return LlamaCppReasoner(
+        base_url=reasoning_cfg.get("endpoint", "http://127.0.0.1:8080"),
+        model=reasoning_cfg.get("model", "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"),
+        timeout=float(reasoning_cfg.get("timeout", 30)),
+    )
+
+
 def run_model_check():
     """Verify local model availability and print status."""
     print("=" * 45)
@@ -57,12 +74,18 @@ def run_model_check():
 
     # 4. Reasoning
     try:
-        from friday.reasoning.local_reasoner import OllamaReasoner
-        reasoner = OllamaReasoner()
+        import yaml
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            raw_cfg = yaml.safe_load(f) or {}
+        _, cfg, _ = validate_config(raw_cfg)
+        reasoning_cfg = cfg.get("reasoning", {})
+        provider = reasoning_cfg.get("provider", "llamacpp")
+        reasoner = _make_reasoner(reasoning_cfg)
         if reasoner.is_available():
-            print("Reasoning    [OK] Ollama llama3:latest")
+            print(f"Reasoning    [OK] {provider} ({reasoner.model})")
         else:
-            print("Reasoning    [FAIL] Ollama unreachable at http://localhost:11434")
+            base = getattr(reasoner, "base_url", None) or getattr(reasoner, "endpoint", None)
+            print(f"Reasoning    [FAIL] {provider} unreachable at {base}")
     except Exception as e:
         print(f"Reasoning    [FAIL] ({e})")
 
@@ -81,7 +104,7 @@ def run_diagnostics(as_json: bool = False):
         "vad": "ok",
         "stt": "ok",
         "tts": "ok",
-        "ollama": "ok",
+        "reasoning": "ok",
         "security": {
             "dry_run": True,
             "allow_real_execution": False
@@ -146,15 +169,19 @@ def run_diagnostics(as_json: bool = False):
         diag_data["tts"] = f"fail ({e})"
         status_ok = False
 
-    # Ollama
+    # Reasoning provider
     try:
-        from friday.reasoning.local_reasoner import OllamaReasoner
-        reasoner = OllamaReasoner()
+        import yaml
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            raw_cfg = yaml.safe_load(f) or {}
+        _, cfg, _ = validate_config(raw_cfg)
+        reasoning_cfg = cfg.get("reasoning", {})
+        reasoner = _make_reasoner(reasoning_cfg)
         if not reasoner.is_available():
-            diag_data["ollama"] = "fail (unreachable)"
+            diag_data["reasoning"] = "fail (unreachable)"
             status_ok = False
     except Exception as e:
-        diag_data["ollama"] = f"fail ({e})"
+        diag_data["reasoning"] = f"fail ({e})"
         status_ok = False
 
     if as_json:
@@ -171,7 +198,7 @@ def run_diagnostics(as_json: bool = False):
         print(f"VAD          [{'OK' if diag_data['vad'] == 'ok' else 'FAIL'}]")
         print(f"STT          [{'OK' if diag_data['stt'] == 'ok' else 'FAIL'}]")
         print(f"TTS          [{'OK' if diag_data['tts'] == 'ok' else 'FAIL'}]")
-        print(f"Ollama       [{'OK' if diag_data['ollama'] == 'ok' else 'FAIL'}]")
+        print(f"Reasoning    [{'OK' if diag_data['reasoning'] == 'ok' else 'FAIL'}]")
         print("Tools        [OK]")
         print("\nSecurity Policy:")
         print("dry_run              [LOCKED: True]")
@@ -205,6 +232,7 @@ def main():
     parser.add_argument("--models", action="store_true", help="Check local model files and Ollama status")
     parser.add_argument("--logs", action="store_true", help="Show log file diagnostic status")
     parser.add_argument("--download-models", action="store_true", help="Download required local voice models")
+    parser.add_argument("--text", action="store_true", help="Start interactive text mode (no voice I/O)")
     args = parser.parse_args()
 
     if args.version:
@@ -234,8 +262,28 @@ def main():
         status_ok = run_diagnostics(as_json=args.json)
         sys.exit(0 if status_ok else 1)
 
+    if args.text:
+        assistant = None
+        try:
+            from friday.core.assistant import Friday
+            assistant = Friday(config_path="config.yaml", text_mode=True)
+            assistant.run_text()
+            sys.exit(0)
+        except KeyboardInterrupt:
+            print("\nFriday: Goodbye!")
+            sys.exit(0)
+        except Exception as err:
+            print("\nF.R.I.D.A.Y. encountered a problem during execution.")
+            print("Run 'python main.py --diagnostics' to diagnose system health.")
+            logger.error(f"[CRASH_BOUNDARY] Uncaught error: {err}", exc_info=True)
+            sys.exit(1)
+        finally:
+            if assistant is not None:
+                assistant.shutdown()
+
     print_user_startup()
 
+    assistant = None
     try:
         from friday.core.assistant import Friday
         assistant = Friday(config_path="config.yaml")
@@ -248,6 +296,8 @@ def main():
         logger.error(f"[CRASH_BOUNDARY] Uncaught error: {err}", exc_info=True)
         sys.exit(1)
     finally:
+        if assistant is not None:
+            assistant.shutdown()
         print(f"\nFriday: Goodbye!")
         sys.exit(0)
 

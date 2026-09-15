@@ -15,15 +15,24 @@ from friday.verification.models import (
 )
 from friday.verification import action_verifiers
 
-_VERIFIER_TABLE: dict[Action, Callable[[str, bool], VerificationResult]] = {
-    Action.OPEN_APP:     action_verifiers.verify_open_app,
-    Action.CLOSE_APP:    action_verifiers.verify_close_app,
-    Action.OPEN_FOLDER:  action_verifiers.verify_open_folder,
-    Action.OPEN_WEBSITE: action_verifiers.verify_open_website,
-    Action.SEARCH_WEB:   action_verifiers.verify_search_web,
-    Action.GET_TIME:     action_verifiers.verify_get_time,
-    Action.FIND_FILE:    action_verifiers.verify_find_file,
-    Action.OPEN_FILE:    action_verifiers.verify_open_file,
+_VERIFIER_TABLE: dict[Action, Callable] = {
+    Action.OPEN_APP:        action_verifiers.verify_open_app,
+    Action.CLOSE_APP:       action_verifiers.verify_close_app,
+    Action.OPEN_FOLDER:     action_verifiers.verify_open_folder,
+    Action.OPEN_WEBSITE:    action_verifiers.verify_open_website,
+    Action.READ_WEBSITE:    action_verifiers.verify_read_website,
+    Action.SEARCH_WEB:      action_verifiers.verify_search_web,
+    Action.GET_TIME:        action_verifiers.verify_get_time,
+    Action.FIND_FILE:       action_verifiers.verify_find_file,
+    Action.OPEN_FILE:       action_verifiers.verify_open_file,
+    Action.REMEMBER:        action_verifiers.verify_remember,
+    Action.RECALL:          action_verifiers.verify_recall,
+    Action.FORGET:          action_verifiers.verify_forget,
+    Action.SET_VOLUME:      action_verifiers.verify_set_volume,
+    Action.MUTE_AUDIO:      action_verifiers.verify_mute_audio,
+    Action.UNMUTE_AUDIO:    action_verifiers.verify_unmute_audio,
+    Action.PAUSE_MEDIA:     action_verifiers.verify_pause_media,
+    Action.SYSTEM_STOP:     action_verifiers.verify_system_stop,
 }
 
 
@@ -63,6 +72,12 @@ def verify_execution(
             verification_latency_ms=(time.perf_counter() - t0) * 1000,
         )
 
-    v_result = verifier_func(intent.target, is_dry_run)
+    import inspect
+    sig = inspect.signature(verifier_func)
+    if len(sig.parameters) >= 3:
+        v_result = verifier_func(intent.target, is_dry_run, execution_result)
+    else:
+        v_result = verifier_func(intent.target, is_dry_run)
+
     v_result.verification_latency_ms = (time.perf_counter() - t0) * 1000
     return v_result

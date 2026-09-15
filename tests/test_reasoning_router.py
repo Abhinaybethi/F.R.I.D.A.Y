@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -18,7 +18,7 @@ class MockReasoner(Reasoner):
     def health(self) -> str:
         return "mock"
         
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         self.called = True
         return self.mock_response
         

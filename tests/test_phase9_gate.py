@@ -1,4 +1,4 @@
-"""
+﻿"""
 PHASE 9 GATE TEST
 ==================
 20-point verification of all Phase 9 safety invariants and architectural requirements.
@@ -53,7 +53,7 @@ def _load_cfg():
         return yaml.safe_load(f)
 
 
-# Gate 1 — Verification layer exists
+# Gate 1 â€” Verification layer exists
 def test_gate1_verification_layer_exists():
     import friday.verification
     import friday.verification.models
@@ -63,7 +63,7 @@ def test_gate1_verification_layer_exists():
     print("[OK] Gate 1: Verification layer subsystem exists")
 
 
-# Gate 2 — Execution and verification are separate
+# Gate 2 â€” Execution and verification are separate
 def test_gate2_execution_and_verification_are_separate():
     exec_res = ExecutionResult(
         action=Action.OPEN_APP,
@@ -81,7 +81,7 @@ def test_gate2_execution_and_verification_are_separate():
     print("[OK] Gate 2: Execution and verification results are separate")
 
 
-# Gate 3 — Verification cannot execute actions
+# Gate 3 â€” Verification cannot execute actions
 def test_gate3_verification_cannot_execute_actions():
     ver_dir = Path(__file__).parent.parent / "friday" / "verification"
     forbidden = ["shell=True", "os.system", "subprocess.Popen", "subprocess.run", "eval(", "exec("]
@@ -93,7 +93,7 @@ def test_gate3_verification_cannot_execute_actions():
     print("[OK] Gate 3: Verification is strictly observational (read-only)")
 
 
-# Gate 4 — Permission gate still works
+# Gate 4 â€” Permission gate still works
 def test_gate4_permission_gate_enforced():
     perms = dict(_ALL_ENABLED)
     perms["open_app"] = False
@@ -103,7 +103,7 @@ def test_gate4_permission_gate_enforced():
     print("[OK] Gate 4: Permission gate enforced before tool execution")
 
 
-# Gate 5 — Confirmation gate still works
+# Gate 5 â€” Confirmation gate still works
 def test_gate5_confirmation_gate_enforced():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -112,7 +112,7 @@ def test_gate5_confirmation_gate_enforced():
     print("[OK] Gate 5: CLOSE_APP requires confirmation")
 
 
-# Gate 6 — Plan validation still works
+# Gate 6 â€” Plan validation still works
 def test_gate6_plan_validation_enforced():
     perms = dict(_ALL_ENABLED)
     perms["open_website"] = False
@@ -122,13 +122,13 @@ def test_gate6_plan_validation_enforced():
     print("[OK] Gate 6: Upfront plan validation enforced")
 
 
-# Gate 7 — Reasoner plans still pass validation
+# Gate 7 â€” Reasoner plans still pass validation
 def test_gate7_reasoner_plans_pass_validation():
     from friday.reasoning.interface import Reasoner
     from friday.planning.context_resolver import ShortTermContext
 
     class MockPlanReasoner(Reasoner):
-        def request(self, transcript: str, context: ShortTermContext) -> dict:
+        def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
             return {
                 "type": "plan",
                 "steps": [
@@ -155,7 +155,7 @@ def test_gate7_reasoner_plans_pass_validation():
     print("[OK] Gate 7: Reasoner-generated plans pass upfront plan validation")
 
 
-# Gate 8 — Multi-step execution stops after failed verification or execution
+# Gate 8 â€” Multi-step execution stops after failed verification or execution
 def test_gate8_multistep_execution_stops_on_step_failure():
     plan = ActionPlan(steps=[
         _intent(Action.OPEN_APP, target="unknown_app_9999"),
@@ -170,7 +170,7 @@ def test_gate8_multistep_execution_stops_on_step_failure():
     print("[OK] Gate 8: Multi-step plan halts on step execution/verification failure")
 
 
-# Gate 9 — Audit logging records execution + verification status + final status
+# Gate 9 â€” Audit logging records execution + verification status + final status
 def test_gate9_audit_logging_includes_verification():
     registry.execute(_intent(Action.GET_TIME), dry_run=True, permissions=_ALL_ENABLED)
     audit_path = Path(__file__).parent.parent / "logs" / "friday_audit.log"
@@ -182,7 +182,7 @@ def test_gate9_audit_logging_includes_verification():
     print("[OK] Gate 9: Audit log includes verification and final_status fields")
 
 
-# Gate 10 — TTS receives final verified result
+# Gate 10 â€” TTS receives final verified result
 def test_gate10_tts_receives_final_verified_result():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -192,21 +192,21 @@ def test_gate10_tts_receives_final_verified_result():
     print("[OK] Gate 10: TTS receives human-readable verified response")
 
 
-# Gate 11 — dry_run remains true by default
+# Gate 11 â€” dry_run remains true by default
 def test_gate11_dry_run_default_is_true():
     cfg = _load_cfg()
     assert cfg.get("tools", {}).get("dry_run", True) is True
     print("[OK] Gate 11: dry_run remains True in default config")
 
 
-# Gate 12 — allow_real_execution remains false by default
+# Gate 12 â€” allow_real_execution remains false by default
 def test_gate12_allow_real_execution_default_is_false():
     cfg = _load_cfg()
     assert cfg.get("tools", {}).get("allow_real_execution", False) is False
     print("[OK] Gate 12: allow_real_execution remains False in default config")
 
 
-# Gate 13 — No dangerous shell execution patterns
+# Gate 13 â€” No dangerous shell execution patterns
 def test_gate13_no_dangerous_shell_execution():
     tools_dir = Path(__file__).parent.parent / "friday" / "tools"
     for pyfile in glob.glob(str(tools_dir / "*.py")):
@@ -217,7 +217,7 @@ def test_gate13_no_dangerous_shell_execution():
     print("[OK] Gate 13: Zero dangerous shell execution patterns in tool layer")
 
 
-# Gate 14 — Legacy system_control is not wired into active pipeline
+# Gate 14 â€” Legacy system_control is not wired into active pipeline
 def test_gate14_legacy_system_control_not_wired():
     active_modules = [
         "main.py",
@@ -243,7 +243,7 @@ def test_gate14_legacy_system_control_not_wired():
     print("[OK] Gate 14: Legacy friday/system_control is not imported in active pipeline")
 
 
-# Gate 15 — ExecutionStatus enum
+# Gate 15 â€” ExecutionStatus enum
 def test_gate15_execution_status_enum():
     assert hasattr(ExecutionStatus, "SUCCESS")
     assert hasattr(ExecutionStatus, "FAILED")
@@ -251,7 +251,7 @@ def test_gate15_execution_status_enum():
     print("[OK] Gate 15: ExecutionStatus enum has required fields")
 
 
-# Gate 16 — VerificationStatus enum
+# Gate 16 â€” VerificationStatus enum
 def test_gate16_verification_status_enum():
     assert hasattr(VerificationStatus, "VERIFIED_SUCCESS")
     assert hasattr(VerificationStatus, "FAILED")
@@ -261,7 +261,7 @@ def test_gate16_verification_status_enum():
     print("[OK] Gate 16: VerificationStatus enum has required fields")
 
 
-# Gate 17 — FinalStatus enum
+# Gate 17 â€” FinalStatus enum
 def test_gate17_final_status_enum():
     assert hasattr(FinalStatus, "SUCCESS")
     assert hasattr(FinalStatus, "FAILED")
@@ -270,14 +270,14 @@ def test_gate17_final_status_enum():
     print("[OK] Gate 17: FinalStatus enum has required fields")
 
 
-# Gate 18 — Single-intent execution returns ActionOutcome
+# Gate 18 â€” Single-intent execution returns ActionOutcome
 def test_gate18_single_intent_returns_action_outcome():
     outcome = registry.execute(_intent(Action.GET_TIME), dry_run=True, permissions=_ALL_ENABLED)
     assert isinstance(outcome, ActionOutcome)
     print("[OK] Gate 18: Single intent execution returns typed ActionOutcome")
 
 
-# Gate 19 — Blocked execution skips verification
+# Gate 19 â€” Blocked execution skips verification
 def test_gate19_blocked_execution_skips_verification():
     perms = dict(_ALL_ENABLED)
     perms["open_app"] = False
@@ -286,7 +286,7 @@ def test_gate19_blocked_execution_skips_verification():
     print("[OK] Gate 19: Blocked execution skips verification")
 
 
-# Gate 20 — ActionOutcome supports dict indexing
+# Gate 20 â€” ActionOutcome supports dict indexing
 def test_gate20_action_outcome_dict_indexing():
     outcome = registry.execute(_intent(Action.GET_TIME), dry_run=True, permissions=_ALL_ENABLED)
     assert outcome["success"] is True

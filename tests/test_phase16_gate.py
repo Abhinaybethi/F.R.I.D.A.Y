@@ -1,4 +1,4 @@
-"""
+﻿"""
 PHASE 16 GATE TEST
 ===================
 20-point Real-World Reliability & Usability Certification Gate.
@@ -37,7 +37,7 @@ def _load_cfg():
         return yaml.safe_load(f)
 
 
-# Gate 1 — Real barge-in benchmark script exists and runs
+# Gate 1 â€” Real barge-in benchmark script exists and runs
 def test_gate1_barge_in_benchmark():
     from scripts.benchmark_barge_in import benchmark_barge_in_latency
     res = benchmark_barge_in_latency(num_attempts=2)
@@ -46,7 +46,7 @@ def test_gate1_barge_in_benchmark():
     print("[OK] Gate 1: Barge-in latency benchmark runs cleanly (< 200 ms)")
 
 
-# Gate 2 — Voice-to-response pipeline benchmark script exists and runs
+# Gate 2 â€” Voice-to-response pipeline benchmark script exists and runs
 def test_gate2_voice_pipeline_benchmark():
     from scripts.benchmark_voice_pipeline import benchmark_voice_to_response_pipeline
     res = benchmark_voice_to_response_pipeline(num_samples=2)
@@ -55,7 +55,7 @@ def test_gate2_voice_pipeline_benchmark():
     print("[OK] Gate 2: Voice-to-response pipeline benchmark runs cleanly (< 800 ms)")
 
 
-# Gate 3 — 30-minute stress test script exists and runs
+# Gate 3 â€” 30-minute stress test script exists and runs
 def test_gate3_stress_test_script():
     from scripts.stress_voice_session import run_stability_stress_test
     res = run_stability_stress_test(duration_seconds=2)
@@ -64,7 +64,7 @@ def test_gate3_stress_test_script():
     print("[OK] Gate 3: Stress test script runs cleanly without failure")
 
 
-# Gate 4 — State machine barge-in recovery
+# Gate 4 â€” State machine barge-in recovery
 def test_gate4_state_machine_barge_in():
     from friday.core.state import StateMachine
     sm = StateMachine(ConversationState.RESPONDING)
@@ -73,7 +73,7 @@ def test_gate4_state_machine_barge_in():
     print("[OK] Gate 4: State machine barge-in recovery verified")
 
 
-# Gate 5 — State machine confirmation cancel recovery
+# Gate 5 â€” State machine confirmation cancel recovery
 def test_gate5_confirmation_cancel():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -84,7 +84,7 @@ def test_gate5_confirmation_cancel():
     print("[OK] Gate 5: Confirmation cancel resets pending intent cleanly")
 
 
-# Gate 6 — State machine stop during TTS
+# Gate 6 â€” State machine stop during TTS
 def test_gate6_stop_during_tts():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -95,7 +95,7 @@ def test_gate6_stop_during_tts():
 
 
 class GateExceptionThrowingReasoner(Reasoner):
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         raise RuntimeError("Simulated Ollama Timeout / Exception")
     def is_available(self) -> bool:
         return True
@@ -108,7 +108,7 @@ class GateExceptionThrowingReasoner(Reasoner):
 class GateMockCallCountingReasoner(Reasoner):
     def __init__(self):
         self.call_count = 0
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         self.call_count += 1
         return {"type": "unknown"}
     def is_available(self) -> bool:
@@ -119,7 +119,7 @@ class GateMockCallCountingReasoner(Reasoner):
         pass
 
 
-# Gate 7 — Reasoner exception recovery
+# Gate 7 â€” Reasoner exception recovery
 def test_gate7_reasoner_exception_recovery():
     cm = ConversationManager(dry_run=True, reasoner=GateExceptionThrowingReasoner(), permissions=_ALL_ENABLED)
     cm.start_session()
@@ -129,7 +129,7 @@ def test_gate7_reasoner_exception_recovery():
     print("[OK] Gate 7: Reasoner exception recovers cleanly to LISTENING state")
 
 
-# Gate 8 — Audio worker thread termination
+# Gate 8 â€” Audio worker thread termination
 def test_gate8_audio_worker_termination():
     from friday.voice.text_to_speech import TextToSpeech
     from friday.voice.async_session import AsyncVoiceSessionManager
@@ -141,7 +141,7 @@ def test_gate8_audio_worker_termination():
     print("[OK] Gate 8: Audio worker threads terminate cleanly")
 
 
-# Gate 9 — UX flow 1: Anaphora pronoun
+# Gate 9 â€” UX flow 1: Anaphora pronoun
 def test_gate9_ux_anaphora():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -151,7 +151,7 @@ def test_gate9_ux_anaphora():
     print("[OK] Gate 9: UX flow 1 (anaphora pronoun) verified")
 
 
-# Gate 10 — UX flow 2: Search indexing
+# Gate 10 â€” UX flow 2: Search indexing
 def test_gate10_ux_search_indexing():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -162,7 +162,7 @@ def test_gate10_ux_search_indexing():
     print("[OK] Gate 10: UX flow 2 (search indexing) verified")
 
 
-# Gate 11 — UX flow 3: Fuzzy confirm YES
+# Gate 11 â€” UX flow 3: Fuzzy confirm YES
 def test_gate11_ux_fuzzy_confirm_yes():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -172,7 +172,7 @@ def test_gate11_ux_fuzzy_confirm_yes():
     print("[OK] Gate 11: UX flow 3 (fuzzy confirm yes) verified")
 
 
-# Gate 12 — UX flow 4: Fuzzy confirm NO
+# Gate 12 â€” UX flow 4: Fuzzy confirm NO
 def test_gate12_ux_fuzzy_confirm_no():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -182,7 +182,7 @@ def test_gate12_ux_fuzzy_confirm_no():
     print("[OK] Gate 12: UX flow 4 (fuzzy confirm no) verified")
 
 
-# Gate 13 — UX flow 5: Close cancel
+# Gate 13 â€” UX flow 5: Close cancel
 def test_gate13_ux_close_cancel():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -192,7 +192,7 @@ def test_gate13_ux_close_cancel():
     print("[OK] Gate 13: UX flow 5 (close cancel) verified")
 
 
-# Gate 14 — Performance budget deterministic voice-to-response
+# Gate 14 â€” Performance budget deterministic voice-to-response
 def test_gate14_performance_budget():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -201,7 +201,7 @@ def test_gate14_performance_budget():
     print("[OK] Gate 14: Performance budget deterministic voice-to-response verified")
 
 
-# Gate 15 — Performance budget known command 100% Ollama bypass
+# Gate 15 â€” Performance budget known command 100% Ollama bypass
 def test_gate15_ollama_bypass_budget():
     mock_r = GateMockCallCountingReasoner()
     cm = ConversationManager(dry_run=True, reasoner=mock_r, permissions=_ALL_ENABLED)
@@ -211,7 +211,7 @@ def test_gate15_ollama_bypass_budget():
     print("[OK] Gate 15: Known command 100% Ollama bypass verified")
 
 
-# Gate 16 — Zero dangerous execution tokens in codebase
+# Gate 16 â€” Zero dangerous execution tokens in codebase
 def test_gate16_zero_dangerous_tokens():
     root = Path(__file__).parent.parent
     forbidden = ["shell=True", "os.system", "eval(", "exec("]
@@ -224,7 +224,7 @@ def test_gate16_zero_dangerous_tokens():
     print("[OK] Gate 16: Zero dangerous execution tokens in codebase")
 
 
-# Gate 17 — Config safety defaults preserved
+# Gate 17 â€” Config safety defaults preserved
 def test_gate17_config_safety_defaults():
     cfg = _load_cfg()
     assert cfg.get("tools", {}).get("dry_run", True) is True
@@ -232,7 +232,7 @@ def test_gate17_config_safety_defaults():
     print("[OK] Gate 17: config.yaml defaults remain dry_run: true and allow_real_execution: false")
 
 
-# Gate 18 — Structured audit log entries
+# Gate 18 â€” Structured audit log entries
 def test_gate18_audit_log_entries():
     registry.execute(Intent(action=Action.GET_TIME), dry_run=True, permissions=_ALL_ENABLED)
     audit_path = Path(__file__).parent.parent / "logs" / "friday_audit.log"
@@ -240,7 +240,7 @@ def test_gate18_audit_log_entries():
     print("[OK] Gate 18: Audit log records structured entries")
 
 
-# Gate 19 — System tray status indicator formatting
+# Gate 19 â€” System tray status indicator formatting
 def test_gate19_system_tray_indicator():
     tooltip = SystemTrayIndicator.get_tray_tooltip(ConversationState.LISTENING)
     icon = SystemTrayIndicator.get_tray_icon_name(ConversationState.LISTENING)
@@ -249,7 +249,7 @@ def test_gate19_system_tray_indicator():
     print("[OK] Gate 19: System tray status indicator formatting verified")
 
 
-# Gate 20 — Phase 16 Certification Status
+# Gate 20 â€” Phase 16 Certification Status
 def test_gate20_phase16_certification():
     valid, _, _ = validate_config(_load_cfg())
     assert valid is True
@@ -259,6 +259,6 @@ def test_gate20_phase16_certification():
 if __name__ == "__main__":
     import pytest
     print("=" * 60)
-    print(" PHASE 16 GATE TEST — REAL-WORLD RELIABILITY & USABILITY")
+    print(" PHASE 16 GATE TEST â€” REAL-WORLD RELIABILITY & USABILITY")
     print("=" * 60)
     pytest.main([__file__, "-v", "--no-header", "--tb=short"])

@@ -23,6 +23,8 @@ _APP_ALIASES: dict[str, str] = {
     "vs code":              "vscode",
     "visual studio code":   "vscode",
     "code":                 "vscode",
+    "brave":                "brave",
+    "brave browser":        "brave",
     "notepad":              "notepad",
     "explorer":             "explorer",
     "file explorer":        "explorer",

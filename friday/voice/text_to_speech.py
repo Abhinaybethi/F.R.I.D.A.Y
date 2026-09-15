@@ -103,7 +103,8 @@ class TextToSpeech:
         clean_text = self._clean_for_speech(text)
         if not clean_text:
             return
-            
+
+        logger.info("[TTS] Speaking response: %r", clean_text)
         print(f"Friday: {clean_text}")
         
         self.abort_event.clear()
@@ -153,28 +154,44 @@ class TextToSpeech:
             sd.wait()
 
     def _speak_kokoro(self, text: str):
-        t0 = time.time()
-        samples, sample_rate = self.kokoro.create(text, voice=self.voice, speed=self.speed, lang="en-us")
-        t1 = time.time()
-        duration = len(samples) / sample_rate
-        rtf = (t1 - t0) / duration if duration > 0 else 0
-        logger.info("[TTS] Kokoro synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
-        
-        self._play_interruptible(samples, sample_rate)
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()] or [text]
+        for s in sentences:
+            if self.abort_event.is_set():
+                break
+            t0 = time.time()
+            samples, sample_rate = self.kokoro.create(s, voice=self.voice, speed=self.speed, lang="en-us")
+            if self.abort_event.is_set():
+                break
+            t1 = time.time()
+            duration = len(samples) / sample_rate
+            rtf = (t1 - t0) / duration if duration > 0 else 0
+            logger.info("[TTS] Kokoro synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+            
+            self._play_interruptible(samples, sample_rate)
+            if self.abort_event.is_set():
+                break
 
     def _speak_piper(self, text: str):
-        t0 = time.time()
-        wav_io = io.BytesIO()
-        with wave.open(wav_io, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(self.piper.config.sample_rate)
-            self.piper.synthesize_wav(text, wav_file)
-        wav_io.seek(0)
-        data, fs = sf.read(wav_io)
-        t1 = time.time()
-        duration = len(data) / fs
-        rtf = (t1 - t0) / duration if duration > 0 else 0
-        logger.info("[TTS] Piper synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
-        
-        self._play_interruptible(data, fs)
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()] or [text]
+        for s in sentences:
+            if self.abort_event.is_set():
+                break
+            t0 = time.time()
+            wav_io = io.BytesIO()
+            with wave.open(wav_io, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.piper.config.sample_rate)
+                self.piper.synthesize_wav(s, wav_file)
+            if self.abort_event.is_set():
+                break
+            wav_io.seek(0)
+            data, fs = sf.read(wav_io)
+            t1 = time.time()
+            duration = len(data) / fs
+            rtf = (t1 - t0) / duration if duration > 0 else 0
+            logger.info("[TTS] Piper synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+            
+            self._play_interruptible(data, fs)
+            if self.abort_event.is_set():
+                break

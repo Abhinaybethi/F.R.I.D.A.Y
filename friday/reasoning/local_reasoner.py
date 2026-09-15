@@ -8,6 +8,7 @@ from typing import Optional
 
 from friday.reasoning.interface import Reasoner
 from friday.reasoning.prompt import SYSTEM_PROMPT
+from friday.reasoning.chat_prompt import CHAT_PROMPT
 from friday.reasoning.parser import parse_reasoning_output
 from friday.reasoning.validator import validate_reasoning_output
 from friday.planning.context_resolver import ShortTermContext
@@ -36,7 +37,7 @@ class OllamaReasoner(Reasoner):
     def close(self):
         pass
         
-    def request(self, transcript: str, context: ShortTermContext) -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
         if not self.is_available():
             return {"type": "unknown"}
             
@@ -51,16 +52,23 @@ class OllamaReasoner(Reasoner):
         user_prompt = f"Transcript: {transcript}\n\n"
         if context_str:
             user_prompt += f"Context:\n{context_str}\n"
+
+        if mode == "chat":
+            system_prompt = CHAT_PROMPT
+            num_predict = 512
+        else:
+            system_prompt = SYSTEM_PROMPT
+            num_predict = 128
             
         payload = {
             "model": self.model,
             "prompt": user_prompt,
-            "system": SYSTEM_PROMPT,
+            "system": system_prompt,
             "stream": False,
             "format": "json",
             "options": {
                 "temperature": 0.0,
-                "num_predict": 256,
+                "num_predict": num_predict,
             },
             "keep_alive": "30m",
         }
@@ -72,11 +80,14 @@ class OllamaReasoner(Reasoner):
                 headers={'Content-Type': 'application/json'},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=3.0) as response:
+            with urllib.request.urlopen(req, timeout=25.0) as response:
                 if response.status == 200:
                     result = json.loads(response.read().decode('utf-8'))
                     raw_output = result.get("response", "")
-                    
+
+                    if mode == "chat" and not raw_output.strip().startswith("{"):
+                        return {"type": "response", "text": raw_output.strip()}
+
                     parsed = parse_reasoning_output(raw_output)
                     validated = validate_reasoning_output(parsed)
                     return validated

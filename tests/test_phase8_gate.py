@@ -1,4 +1,4 @@
-"""
+﻿"""
 PHASE 8 GATE TEST
 ==================
 17-point verification of all Phase 8 safety invariants.
@@ -38,7 +38,7 @@ def _load_cfg():
         return yaml.safe_load(f)
 
 
-# Gate 1 — Default config is safe
+# Gate 1 â€” Default config is safe
 def test_gate1_default_config_is_safe():
     """Config must have dry_run=True and allow_real_execution=False by default."""
     cfg = _load_cfg()
@@ -48,7 +48,7 @@ def test_gate1_default_config_is_safe():
     print("[OK] Gate 1: default config is safe")
 
 
-# Gate 2 — dry_run=True prevents real execution
+# Gate 2 â€” dry_run=True prevents real execution
 def test_gate2_dry_run_prevents_execution():
     result = registry.execute(_intent(Action.OPEN_APP, "notepad"), dry_run=True,
                               allow_real_execution=True, permissions=_ALL_ENABLED)
@@ -56,7 +56,7 @@ def test_gate2_dry_run_prevents_execution():
     print("[OK] Gate 2: dry_run=True prevents real execution")
 
 
-# Gate 3 — allow_real_execution=False prevents execution
+# Gate 3 â€” allow_real_execution=False prevents execution
 def test_gate3_allow_real_false_prevents_execution():
     result = registry.execute(_intent(Action.OPEN_APP, "notepad"), dry_run=False,
                               allow_real_execution=False, permissions=_ALL_ENABLED)
@@ -64,7 +64,7 @@ def test_gate3_allow_real_false_prevents_execution():
     print("[OK] Gate 3: allow_real_execution=False prevents real execution")
 
 
-# Gate 4 — Both gates must pass
+# Gate 4 â€” Both gates must pass
 def test_gate4_both_gates_required():
     # With dry_run=True only
     r = registry.execute(_intent(Action.OPEN_APP, "notepad"), dry_run=True,
@@ -73,7 +73,7 @@ def test_gate4_both_gates_required():
     print("[OK] Gate 4: both gates required for real execution")
 
 
-# Gate 5 — Unknown action is denied
+# Gate 5 â€” Unknown action is denied
 def test_gate5_unknown_action_denied():
     result = registry.execute(_intent(Action.UNKNOWN), dry_run=True,
                               permissions=_ALL_ENABLED)
@@ -81,21 +81,21 @@ def test_gate5_unknown_action_denied():
     print("[OK] Gate 5: UNKNOWN action is blocked")
 
 
-# Gate 6 — Unknown target is denied at tool level
+# Gate 6 â€” Unknown target is denied at tool level
 def test_gate6_unknown_target_denied():
     result = apps.open_app("notarealapp", dry_run=True)
     assert not result["success"]
     print("[OK] Gate 6: unknown target rejected by tool whitelist")
 
 
-# Gate 7 — Arbitrary executable paths are denied
+# Gate 7 â€” Arbitrary executable paths are denied
 def test_gate7_arbitrary_exe_denied():
     result = apps.open_app(r"C:\evil\malware.exe", dry_run=True)
     assert not result["success"]
     print("[OK] Gate 7: arbitrary executable paths denied")
 
 
-# Gate 8 — Shell commands are denied (no shell=True in codebase)
+# Gate 8 â€” Shell commands are denied (no shell=True in codebase)
 def test_gate8_no_shell_true_in_tools():
     import glob
     tools_dir = Path(__file__).parent.parent / "friday" / "tools"
@@ -106,7 +106,7 @@ def test_gate8_no_shell_true_in_tools():
     print("[OK] Gate 8: shell=True absent from all tool files")
 
 
-# Gate 9 — PowerShell is denied
+# Gate 9 â€” PowerShell is denied
 def test_gate9_powershell_denied():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -115,9 +115,9 @@ def test_gate9_powershell_denied():
     print("[OK] Gate 9: PowerShell command rejected")
 
 
-# Gate 10 — File deletion is denied (action doesn't exist)
+# Gate 10 â€” File deletion is denied (action doesn't exist)
 def test_gate10_file_deletion_not_implemented():
-    """DELETE_FILE does not exist in Action enum — structurally impossible."""
+    """DELETE_FILE does not exist in Action enum â€” structurally impossible."""
     action_names = {a.name for a in Action}
     assert "DELETE_FILE" not in action_names
     assert "MOVE_FILE" not in action_names
@@ -126,7 +126,7 @@ def test_gate10_file_deletion_not_implemented():
     print("[OK] Gate 10: destructive actions not in Action enum")
 
 
-# Gate 11 — CLOSE_APP requires confirmation
+# Gate 11 â€” CLOSE_APP requires confirmation
 def test_gate11_close_app_requires_confirmation():
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
     cm.start_session()
@@ -136,14 +136,14 @@ def test_gate11_close_app_requires_confirmation():
     print("[OK] Gate 11: CLOSE_APP requires confirmation")
 
 
-# Gate 12 — Confirmation cannot be bypassed by LLM (mock reasoner test)
+# Gate 12 â€” Confirmation cannot be bypassed by LLM (mock reasoner test)
 def test_gate12_llm_cannot_bypass_confirmation():
     """Even if the LLM produces CLOSE_APP, the safety validator enforces CONFIRM."""
     from friday.reasoning.interface import Reasoner
     from friday.planning.context_resolver import ShortTermContext
 
     class MockReasoner(Reasoner):
-        def request(self, transcript: str, context: ShortTermContext) -> dict:
+        def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
             return {"type": "intent", "action": "CLOSE_APP",
                     "target": "chrome", "confidence": 0.99}
         def is_available(self) -> bool:
@@ -155,13 +155,13 @@ def test_gate12_llm_cannot_bypass_confirmation():
 
     cm = ConversationManager(dry_run=True, reasoner=MockReasoner(), permissions=_ALL_ENABLED)
     cm.start_session()
-    # Input not matched by deterministic router → falls through to MockReasoner
+    # Input not matched by deterministic router â†’ falls through to MockReasoner
     cm.handle_transcript("please close chrome for me immediately")
     assert cm.state == ConversationState.WAITING_FOR_CONFIRMATION
     print("[OK] Gate 12: LLM cannot bypass confirmation for CLOSE_APP")
 
 
-# Gate 13 — Confirmation cannot be bypassed by planner
+# Gate 13 â€” Confirmation cannot be bypassed by planner
 def test_gate13_planner_cannot_bypass_confirmation():
     """Multi-step plan with CLOSE_APP must pause for confirmation."""
     cm = ConversationManager(dry_run=True, permissions=_ALL_ENABLED)
@@ -172,7 +172,7 @@ def test_gate13_planner_cannot_bypass_confirmation():
     print("[OK] Gate 13: planner cannot bypass confirmation for CLOSE_APP")
 
 
-# Gate 14 — Multi-step plans independently validate each step
+# Gate 14 â€” Multi-step plans independently validate each step
 def test_gate14_plan_steps_independently_validated():
     """Each plan step is validated; a DENIED step rejects the whole plan."""
     perms = dict(_ALL_ENABLED)
@@ -184,9 +184,9 @@ def test_gate14_plan_steps_independently_validated():
     print("[OK] Gate 14: plan steps independently validated; denied step rejects plan")
 
 
-# Gate 15 — One denied step aborts remaining execution
+# Gate 15 â€” One denied step aborts remaining execution
 def test_gate15_denied_step_aborts_plan():
-    """validate_plan with a denied step returns False — entire plan is rejected."""
+    """validate_plan with a denied step returns False â€” entire plan is rejected."""
     perms = dict(_ALL_ENABLED)
     perms["open_app"] = False
     steps = [_intent(Action.OPEN_APP, "chrome"), _intent(Action.GET_TIME)]
@@ -196,7 +196,7 @@ def test_gate15_denied_step_aborts_plan():
     print("[OK] Gate 15: denied step aborts entire plan before execution")
 
 
-# Gate 16 — Real execution produces audit log
+# Gate 16 â€” Real execution produces audit log
 def test_gate16_audit_log_written():
     """registry.execute() must write to the audit log."""
     registry.execute(_intent(Action.GET_TIME), dry_run=True, permissions=_ALL_ENABLED)
@@ -208,7 +208,7 @@ def test_gate16_audit_log_written():
     print("[OK] Gate 16: audit log written with action details")
 
 
-# Gate 17 — Permission config present in config.yaml
+# Gate 17 â€” Permission config present in config.yaml
 def test_gate17_permission_config_in_yaml():
     """config.yaml must have a tools.permissions section."""
     cfg = _load_cfg()
