@@ -1,86 +1,190 @@
-# F.R.I.D.A.Y. — Personal AI Voice Assistant
+# F.R.I.D.A.Y. — Personal Local AI Voice Assistant
 
-A 100% offline, privacy-first desktop voice assistant for Windows. Grounded in local speech-to-text (faster-whisper), local voice activity detection (Silero VAD), local speech synthesis (Piper TTS), and local reasoning (Ollama `llama3`).
+**F.R.I.D.A.Y.** is a privacy-first, local AI voice assistant for Windows that combines speech recognition, voice activity detection, local LLM reasoning, tool execution, contextual memory, and text-to-speech into a single desktop assistant.
 
----
-
-## Phase 25 Reliability Certified
-
-- **Long-Run Stability**: 100/100 sustained voice commands executed cleanly (**100% PASS**).
-- **Resource Leaks**: `0` RAM leaks, `0` thread leaks, `0` SQLite leaks, `0` audio handle leaks over continuous multi-turn sessions.
-- **Latency Performance**: Core intent routing P50 = `0.28 ms` | P95 = `7.35 ms`.
-- **Full Regression Pass Rate**: `612 / 612 PASS` across unit, integration, and voice pipeline tests.
-- **Hardware Barge-In**: User speech halts active TTS playback in `~50 ms`.
+The system is designed around a **local-first architecture**: speech processing and LLM inference can run directly on the user's machine without sending conversations to a cloud AI provider.
 
 ---
 
-## Key Features
+## 🚀 Current Architecture
 
-- **100% Offline & Private**: Zero cloud API dependencies, zero external telemetry or tracking.
-- **Fail-Closed Security Architecture**:
-  - `dry_run: true` (default dry-run simulation mode)
-  - `allow_real_execution: false` (requires explicit dual-gate opt-in for real OS execution)
-- **Sub-Millisecond Core Processing**: Deterministic router, fuzzy phonetic matcher, and context resolver run in `< 0.25 ms`.
-- **Background Model Warm-Loading**: ONNX runtime models pre-warmed on startup to eliminate first-turn cold-start spikes.
-- **Anaphora & Context Resolver**: Resolves pronouns ("close it") and search result indexing ("open the first result").
-- **Local SQLite Memory**: Stores preferences, facts, and updates securely with built-in secret filter protection.
-
----
-
-## Quick Start
-
-### 1. Setup Environment (Windows PowerShell)
-
-```powershell
-.\scripts\setup_windows.ps1
+```text
+                    ┌──────────────────────┐
+                    │      Microphone      │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │      Silero VAD      │
+                    │ Voice Activity Detect│
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │    faster-whisper    │
+                    │   Local Speech → Text │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+              ┌────────────────────────────────┐
+              │     Command / Intent Router    │
+              │ Deterministic + Fuzzy Matching │
+              └───────────────┬────────────────┘
+                              │
+                 ┌────────────┴─────────────┐
+                 │                          │
+                 ▼                          ▼
+        ┌─────────────────┐       ┌──────────────────┐
+        │ Known Commands  │       │ Complex Requests │
+        │ Fast Tool Path  │       │ Local LLM Path   │
+        └────────┬────────┘       └─────────┬────────┘
+                 │                          │
+                 │                 ┌────────▼─────────┐
+                 │                 │    Bonsai LLM    │
+                 │                 │      8B GGUF     │
+                 │                 └────────┬─────────┘
+                 │                          │
+                 └────────────┬─────────────┘
+                              ▼
+                    ┌──────────────────────┐
+                    │  Safety / Permission │
+                    │       Gate           │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │     Tool Executor    │
+                    │ Windows / Web / Files │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │   Response Formatter │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │      Kokoro TTS      │
+                    │   Local Speech Output│
+                    └──────────────────────┘
 ```
 
-Or manually:
+---
 
-```powershell
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-python main.py --download-models
+# ✨ Key Features
+
+### 🧠 Local LLM Reasoning
+
+F.R.I.D.A.Y. uses a locally hosted **Bonsai GGUF model** for reasoning.
+
+The model is served through **llama.cpp**, exposing an OpenAI-compatible local HTTP API.
+
+```text
+F.R.I.D.A.Y.
+     │
+     ▼
+LlamaCppReasoner
+     │
+     ▼
+llama-server
+     │
+     ▼
+Bonsai-8B-Q1_0.gguf
 ```
 
-### 2. Run Diagnostics
-
-Verify system readiness and security policy locks:
-
-```powershell
-python main.py --diagnostics
-```
-
-### 3. Run F.R.I.D.A.Y.
-
-```powershell
-python main.py
-```
+No external LLM API is required for the reasoning pipeline.
 
 ---
 
-## Canonical Usage & Voice Commands
+### 🎙️ Local Speech Recognition
 
-| Voice Command | Action Taken |
-|---|---|
-| `"Open Chrome"` / `"Open Notepad"` | Launches application |
-| `"Close Chrome"` | Requests confirmation, then closes app |
-| `"Open grove"` | Fuzzy phonetic recovery -> resolves to `chrome` |
-| `"Search Python tutorials"` | Searches web for topic |
-| `"Open the first result"` | Contextually opens indexed search URL |
-| `"Open Chrome and search Python"` | Executes multi-step compound plan |
-| `"Remember that I prefer VS Code"` | Stores preference in local memory |
-| `"What is my editor preference?"` | Recalls preference from local memory |
-| `"What time is it?"` | Speaks current time |
-| `"Minimize Chrome"` / `"Maximize Chrome"` | Native Windows window control |
-| `"Take screenshot"` | Desktop screenshot capture |
-| `"Cancel"` | Clears pending intent/confirmation |
-| `"Stop"` / `"Goodbye"` | Clean session shutdown |
+Speech recognition is performed locally using:
+
+* **faster-whisper**
+* CPU-optimized inference
+* `small.en` model
+* Local audio processing
+
+The microphone audio never needs to be uploaded to a cloud speech service.
 
 ---
 
-## Security Policy Defaults (`config.yaml`)
+### 🔊 Local Text-to-Speech
+
+F.R.I.D.A.Y. uses local TTS processing for spoken responses.
+
+Current components include:
+
+* **Kokoro ONNX**
+* Local inference
+* Asynchronous playback
+* Hardware/software barge-in support
+
+The assistant can stop active speech when the user starts speaking.
+
+---
+
+### 🎯 Fast Command Routing
+
+F.R.I.D.A.Y. does not send every request to the LLM.
+
+Simple commands are handled directly by the deterministic command router.
+
+For example:
+
+```text
+"Open Chrome"
+        │
+        ▼
+Intent Router
+        │
+        ▼
+open_app("chrome")
+```
+
+Instead of:
+
+```text
+User → STT → LLM → reasoning → tool selection → execution
+```
+
+This reduces unnecessary LLM inference and improves response latency.
+
+---
+
+### 🧩 Context & Anaphora Resolution
+
+F.R.I.D.A.Y. maintains short-term execution context so commands can refer to previously mentioned objects.
+
+Example:
+
+```text
+User: Open Chrome
+
+F.R.I.D.A.Y.: Chrome opened.
+
+User: Close it
+
+F.R.I.D.A.Y.: Close Chrome?
+```
+
+It can also resolve indexed search results:
+
+```text
+User: Search Python tutorials
+
+User: Open the first result
+```
+
+The second command can reference the result generated by the previous operation.
+
+---
+
+### 🔐 Safety-First Tool Execution
+
+System-level actions are protected by centralized permission controls.
+
+Default configuration:
 
 ```yaml
 security:
@@ -90,38 +194,613 @@ security:
 tools:
   dry_run: true
   allow_real_execution: false
-  permissions:
-    open_app: true
-    close_app: true
-    open_folder: true
-    open_website: true
-    search_web: true
-    get_time: true
-    find_file: true
-    open_file: true
-    minimize_app: true
-    maximize_app: true
-    take_screenshot: true
+```
+
+This prevents the assistant from freely executing potentially destructive operations without explicit authorization.
+
+Supported tool categories include:
+
+```text
+Open application
+Close application
+Open folder
+Open website
+Search web
+Get time
+Find files
+Open files
+Minimize application
+Maximize application
+Take screenshot
 ```
 
 ---
 
-## Architecture Overview
+# 🏗️ System Components
 
+## 1. Audio Pipeline
+
+```text
+Microphone
+    ↓
+Audio Capture
+    ↓
+Silero VAD
+    ↓
+Speech Segment
 ```
-Microphone Audio -> Silero VAD -> faster-whisper STT
-  -> Deterministic & Fuzzy Phonetic Router (< 0.25 ms)
-  -> Context & Anaphora Resolver
-  -> Reasoner Gating (100% Ollama bypass for known commands)
-  -> Safety & Plan Validator
-  -> Centralized Permission Gate
-  -> Executer & Post-Action Verifier
-  -> Spoken Response Formatting Engine
-  -> Piper TTS Synthesis (with Async Hardware Barge-In)
+
+Silero VAD determines when the user is speaking and prevents unnecessary transcription of silence and background noise.
+
+---
+
+## 2. Speech-to-Text
+
+```text
+Speech Segment
+      ↓
+faster-whisper
+      ↓
+Transcript
+```
+
+The transcription model runs locally.
+
+---
+
+## 3. Intent Detection
+
+The transcript is processed by the command-routing layer.
+
+```text
+Transcript
+    ↓
+Normalization
+    ↓
+Deterministic Matching
+    ↓
+Fuzzy / Phonetic Matching
+    ↓
+Intent Detection
+```
+
+This allows commands such as:
+
+```text
+"Open Chrome"
+"Open grove"
+"Open chorme"
+```
+
+to potentially resolve to the intended application when the fuzzy matching layer identifies the target.
+
+---
+
+## 4. LLM Reasoning
+
+Requests that require natural-language reasoning can be routed to the local LLM.
+
+```text
+User Request
+     ↓
+Reasoner Gate
+     ↓
+LlamaCppReasoner
+     ↓
+llama-server
+     ↓
+Bonsai GGUF
+     ↓
+Generated Response / Plan
+```
+
+The local server is automatically started when required if it is not already running.
+
+Example server:
+
+```text
+http://127.0.0.1:8080
+```
+
+Health check:
+
+```text
+GET /health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok"
+}
 ```
 
 ---
 
-## License
+# 🤖 Why llama.cpp?
 
-MIT License. Grounded in open-source local models.
+F.R.I.D.A.Y. uses **llama.cpp** as the inference server rather than depending on Ollama.
+
+The architecture is:
+
+```text
+Bonsai GGUF
+     ↓
+llama-server
+     ↓
+OpenAI-compatible HTTP API
+     ↓
+F.R.I.D.A.Y.
+```
+
+This provides a lightweight local inference layer and allows F.R.I.D.A.Y. to communicate with the model through a standard HTTP interface.
+
+---
+
+# 📦 GGUF Model Support
+
+F.R.I.D.A.Y. is designed to work with locally stored GGUF models.
+
+Example:
+
+```text
+Bonsai-8B-Q1_0.gguf
+```
+
+The model is loaded by `llama-server`.
+
+Example:
+
+```powershell
+llama-server `
+  -m C:\AI\models\Bonsai-8B-Q1_0.gguf `
+  -c 2048 `
+  --host 127.0.0.1 `
+  --port 8080
+```
+
+F.R.I.D.A.Y. can then communicate with the local server through its HTTP API.
+
+---
+
+# ⚡ Performance-Oriented Architecture
+
+One of the main design principles of F.R.I.D.A.Y. is:
+
+> **Do not use an LLM when deterministic software can solve the problem.**
+
+For example:
+
+```text
+"Open Chrome"
+```
+
+should not require an LLM.
+
+Instead:
+
+```text
+Audio
+ ↓
+VAD
+ ↓
+Whisper
+ ↓
+Intent Router
+ ↓
+Tool Executor
+```
+
+For a more complex request:
+
+```text
+Audio
+ ↓
+VAD
+ ↓
+Whisper
+ ↓
+Intent Detection
+ ↓
+Reasoner Gate
+ ↓
+Bonsai
+ ↓
+Tool / Response
+```
+
+This hybrid architecture reduces unnecessary inference overhead.
+
+---
+
+# 🧠 Local Memory
+
+F.R.I.D.A.Y. supports local persistent memory for storing useful information such as preferences and facts.
+
+Example:
+
+```text
+User:
+Remember that I prefer VS Code.
+
+F.R.I.D.A.Y.:
+I'll remember that.
+```
+
+Later:
+
+```text
+User:
+What is my editor preference?
+
+F.R.I.D.A.Y.:
+You prefer VS Code.
+```
+
+Memory is stored locally rather than being dependent on a cloud memory service.
+
+---
+
+# 🖥️ Desktop Overlay
+
+F.R.I.D.A.Y. includes a Windows desktop overlay for interacting with the assistant.
+
+The overlay provides functionality such as:
+
+* Audio capture
+* Microphone selection
+* WebSocket connection
+* Session management
+* Start/Stop capture
+* Connection recovery
+* Click-through mode
+* Visibility controls
+
+The overlay communicates with the F.R.I.D.A.Y. backend in real time.
+
+---
+
+# 🔄 Real-Time Pipeline
+
+The current voice pipeline follows this flow:
+
+```text
+Microphone
+    ↓
+Audio WebSocket
+    ↓
+VAD
+    ↓
+faster-whisper
+    ↓
+Transcript Buffer
+    ↓
+Question / Command Detector
+    ↓
+Context Resolver
+    ↓
+Fast Router
+    │
+    ├── Known command → Tool
+    │
+    └── Complex request → Bonsai
+                            ↓
+                       llama.cpp
+    ↓
+Response
+    ↓
+Kokoro TTS
+    ↓
+Speaker
+```
+
+---
+
+# 🛠️ Tech Stack
+
+| Component     | Technology       |
+| ------------- | ---------------- |
+| Language      | Python           |
+| Backend       | FastAPI          |
+| LLM           | Bonsai           |
+| LLM Format    | GGUF             |
+| Inference     | llama.cpp        |
+| STT           | faster-whisper   |
+| VAD           | Silero VAD       |
+| TTS           | Kokoro ONNX      |
+| Memory        | SQLite           |
+| Communication | WebSocket / HTTP |
+| ML Runtime    | ONNX Runtime     |
+| OS            | Windows          |
+| Configuration | YAML             |
+
+---
+
+# 📁 High-Level Project Structure
+
+```text
+F.R.I.D.A.Y/
+│
+├── friday/
+│   ├── audio/
+│   ├── reasoning/
+│   │   ├── llamacpp_reasoner.py
+│   │   └── llamacpp_server.py
+│   ├── routing/
+│   ├── tools/
+│   ├── memory/
+│   ├── context/
+│   └── ...
+│
+├── desktop/
+│   └── stealth_overlay.py
+│
+├── models/
+│
+├── scripts/
+│
+├── config.yaml
+├── main.py
+├── requirements.txt
+└── README.md
+```
+
+---
+
+# 🚀 Installation
+
+## 1. Clone the repository
+
+```powershell
+git clone https://github.com/Abhinaybethi/F.R.I.D.A.Y.git
+
+cd F.R.I.D.A.Y
+```
+
+## 2. Create a virtual environment
+
+```powershell
+python -m venv venv
+```
+
+Activate it:
+
+```powershell
+.\venv\Scripts\activate
+```
+
+## 3. Install dependencies
+
+```powershell
+pip install -r requirements.txt
+```
+
+---
+
+# 🧠 Configure the Local Model
+
+Place your GGUF model in your configured model directory.
+
+Example:
+
+```text
+C:\AI\models\Bonsai-8B-Q1_0.gguf
+```
+
+Configure the model/server settings in the project configuration.
+
+F.R.I.D.A.Y. can automatically detect an existing llama.cpp server and can start the server when required.
+
+---
+
+# 🔍 Run Diagnostics
+
+Before starting the assistant:
+
+```powershell
+python main.py --diagnostics
+```
+
+This checks the local environment and important runtime components.
+
+---
+
+# ▶️ Start F.R.I.D.A.Y.
+
+Voice mode:
+
+```powershell
+python main.py
+```
+
+Text mode:
+
+```powershell
+python main.py --text
+```
+
+Text mode is useful for testing the reasoning and command pipeline without using the microphone.
+
+---
+
+# 🧪 Example Commands
+
+### Application Control
+
+```text
+Open Chrome
+Open Notepad
+Close Chrome
+Minimize Chrome
+Maximize Chrome
+```
+
+### Web
+
+```text
+Search Python tutorials
+Search machine learning courses
+```
+
+### Context
+
+```text
+Search Python tutorials
+Open the first result
+```
+
+### Memory
+
+```text
+Remember that I prefer VS Code
+What is my editor preference?
+```
+
+### System
+
+```text
+What time is it?
+Take screenshot
+```
+
+### Session
+
+```text
+Cancel
+Stop
+Goodbye
+```
+
+---
+
+# 🔒 Security Model
+
+F.R.I.D.A.Y. follows a **fail-closed execution model**.
+
+Default:
+
+```yaml
+security:
+  dry_run: true
+  allow_real_execution: false
+```
+
+The execution layer is protected by a centralized permission gate.
+
+Conceptually:
+
+```text
+LLM / User Intent
+       ↓
+Plan Validation
+       ↓
+Permission Gate
+       ↓
+Execution Policy
+       ↓
+Tool Executor
+       ↓
+Post-Action Verification
+```
+
+The LLM does **not** receive unrestricted operating-system access.
+
+---
+
+# 🧪 Testing
+
+The project includes testing across multiple layers:
+
+```text
+Unit Tests
+Integration Tests
+Routing Tests
+Reasoning Tests
+Audio Pipeline Tests
+Tool Execution Tests
+```
+
+Before describing the project as production-ready, performance and reliability numbers should be generated from reproducible test runs rather than manually claimed.
+
+---
+
+# 🎯 Design Goals
+
+F.R.I.D.A.Y. is built around five principles:
+
+### 1. Local First
+
+Keep speech, reasoning, memory, and assistant processing on the user's machine whenever possible.
+
+### 2. Fast Path First
+
+Use deterministic software for deterministic tasks.
+
+### 3. LLM Only When Needed
+
+Use local LLM reasoning for requests that actually require language understanding or planning.
+
+### 4. Fail Closed
+
+Potentially dangerous system operations should require explicit permission.
+
+### 5. Modular Architecture
+
+Speech recognition, reasoning, routing, memory, tools, and TTS should remain replaceable components.
+
+---
+
+# 🛣️ Roadmap
+
+* [x] Local speech recognition
+* [x] Local VAD
+* [x] Local LLM inference
+* [x] GGUF model support
+* [x] llama.cpp integration
+* [x] Automatic llama.cpp server startup
+* [x] Fast command routing
+* [x] Context resolution
+* [x] Local memory
+* [x] Tool registry
+* [x] Permission gate
+* [x] Desktop overlay
+* [x] Real-time audio pipeline
+* [x] Text mode
+* [ ] More Windows automation tools
+* [ ] Better long-term memory retrieval
+* [ ] More robust multi-step agent planning
+* [ ] Improved GPU acceleration
+* [ ] Expanded local model support
+
+---
+
+# 📜 License
+
+MIT License.
+
+---
+
+# 👨‍💻 Author
+
+**Abhinay Bethi**
+
+Computer Science Engineer focused on:
+
+* AI/ML
+* Local LLM systems
+* AI agents
+* Backend engineering
+* Full-stack development
+* Computer vision
+* Automation
+
+GitHub: `https://github.com/Abhinaybethi`
+
+---
+
+## ⭐ Project Philosophy
+
+F.R.I.D.A.Y. is not intended to be another chatbot with a microphone.
+
+The goal is to build a **local AI agent that can perceive, reason, remember, and interact with the desktop while keeping the core intelligence on the user's own machine.**
