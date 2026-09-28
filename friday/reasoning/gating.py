@@ -11,7 +11,9 @@ from friday.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_SYSTEM_COMMANDS = {"help", "repeat", "cancel", "never mind", "nevermind", "abort", "stop", "exit", "quit"}
+_SYSTEM_COMMANDS = {"help", "repeat", "cancel", "never mind", "nevermind", "abort", "stop", "exit", "quit",
+                    "goodbye", "good bye", "bye", "shut down", "shutdown", "stop friday", "see you",
+                    "thats all", "that's all"}
 _BARE_CONFIRMATIONS = {"yes", "yeah", "yep", "sure", "no", "nope", "nah"}
 
 

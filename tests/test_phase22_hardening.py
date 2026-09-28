@@ -65,7 +65,7 @@ def test_1_entity_resolution_adversarial():
 
         ctx_one = ShortTermContext(last_search_results=[{"title": "Only One", "url": "https://example.com/1"}])
         res_a2, err_a2 = resolve_context("open the second one", ctx_one)
-        assert err_a2 and "out of range" in err_a2
+        assert err_a2 and "only found 1" in err_a2
 
 
 def test_2_memory_adversarial():

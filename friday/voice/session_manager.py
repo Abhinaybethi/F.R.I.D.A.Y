@@ -138,11 +138,17 @@ class VoiceSessionManager:
     # Utterance capture
     # ------------------------------------------------------------------
 
-    def listen_once(self) -> str:
+    def listen_once(self, initial_chunks=None) -> str:
         """
         Wait for a single utterance and return its transcription.
 
         The microphone stream must already be open (call ``start_session()`` first).
+
+        ``initial_chunks`` optionally seeds the utterance with audio already
+        captured (e.g. the user's barge-in interruption while TTS was speaking).
+        When provided the queue is NOT drained first, so the leading words of
+        the interrupt are preserved instead of being discarded (barge-in
+        continuity).
 
         Returns
         -------
@@ -158,13 +164,29 @@ class VoiceSessionManager:
             )
             return ""
 
-        # Flush any audio that accumulated while we were busy transcribing.
-        self.audio.drain()
-        self.vad.reset_states()
+        # Seed the utterance with pre-captured interrupt audio (barge-in).
+        # Skipping drain() here is intentional: draining would throw away the
+        # first words of the user's interruption.
+        if initial_chunks:
+            self.vad.reset_states()
+            buffer = []
+            is_speech = True
+            silence_frames = 0
+            for chunk in initial_chunks:
+                self.vad.is_speech(chunk)  # keep Silero internal state consistent
+                buffer.append(chunk)
+            logger.info(
+                "[VOICE] Resuming barge-in capture with %d pre-captured chunk(s).",
+                len(buffer),
+            )
+        else:
+            # Flush any audio that accumulated while we were busy transcribing.
+            self.audio.drain()
+            self.vad.reset_states()
 
-        buffer = []
-        is_speech = False
-        silence_frames = 0
+            buffer = []
+            is_speech = False
+            silence_frames = 0
         speech_start_frame = None
 
         max_silence_frames = int(
@@ -222,7 +244,7 @@ class VoiceSessionManager:
         saved_path = self._debug_saver.save(audio_data, self.audio.sample_rate)
         self._debug_saver.maybe_playback(saved_path)
 
-        text, rtf = self.stt.transcribe(audio_data)
+        text, rtf, meta = self.stt.transcribe_detailed(audio_data)
         logger.info(
             "[STT] Transcription complete: %r | audio=%.1fs RTF=%.2f",
             text, audio_sec, rtf,
@@ -230,6 +252,16 @@ class VoiceSessionManager:
 
         # VAD fired, but Whisper produced nothing legible
         if not text:
+            return _NO_SPEECH
+
+        # Whisper decoded *something* but with low confidence — likely VAD
+        # noise / mis-trigger rather than a real utterance (P7).
+        if not meta.quality_ok:
+            logger.info(
+                "[STT] Rejecting low-quality transcription %r (avg_logprob=%.2f "
+                "no_speech=%.2f) -> %s",
+                text, meta.avg_logprob, meta.no_speech_prob, _NO_SPEECH,
+            )
             return _NO_SPEECH
 
         logger.info("[VOICE] Sending transcript to assistant: %r", text)

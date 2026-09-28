@@ -147,7 +147,68 @@ def validate_config(config: dict) -> Tuple[bool, dict, list[str]]:
     reasoning["server"] = server
     sanitized["reasoning"] = reasoning
 
-    # 3. Voice Layer Validation (active-session / wake-gate settings)
+    # 3. RAG / Retrieval Layer Validation
+    rag = dict(sanitized.get("rag", {}))
+
+    enabled = rag.get("enabled", True)
+    if not isinstance(enabled, bool):
+        messages.append(f"Invalid rag.enabled {enabled!r}; defaulting to True.")
+        enabled = True
+    rag["enabled"] = enabled
+
+    collection = rag.get("collection", "friday_knowledge")
+    if not isinstance(collection, str) or not (3 <= len(collection) <= 512):
+        messages.append(f"Invalid rag.collection {collection!r}; defaulting to 'friday_knowledge'.")
+        rag["collection"] = "friday_knowledge"
+
+    for key, lo, hi, default, cast in (
+        ("retrieval_k", 1, 50, 15, int),
+        ("final_k", 1, 20, 5, int),
+        ("max_context_tokens", 200, 12000, 3000, int),
+    ):
+        val = rag.get(key, default)
+        if not isinstance(val, (int, float)):
+            messages.append(f"Invalid rag.{key} {val!r}; defaulting to {default}.")
+            rag[key] = default
+        else:
+            rag[key] = cast(max(lo, min(hi, val)))
+
+    for key, lo, hi, default in (
+        ("similarity_threshold", 0.0, 1.0, 0.30),
+        ("relevance_min_score", 0.0, 1.0, 0.30),
+        ("bm25_k1", 0.1, 3.0, 1.5),
+        ("bm25_b", 0.0, 1.0, 0.75),
+    ):
+        val = rag.get(key, default)
+        if not isinstance(val, (int, float)):
+            messages.append(f"Invalid rag.{key} {val!r}; defaulting to {default}.")
+            rag[key] = default
+        else:
+            rag[key] = max(lo, min(hi, float(val)))
+
+    for key in ("rerank", "hybrid", "context_compression", "auto_ingest", "include_md"):
+        if not isinstance(rag.get(key, True), bool):
+            messages.append(f"Invalid rag.{key} {rag.get(key)!r}; defaulting to True.")
+            rag[key] = True
+
+    persist_dir = rag.get("persist_dir", "")
+    if persist_dir and not isinstance(persist_dir, str):
+        messages.append("Invalid rag.persist_dir; defaulting to project .data/rag.")
+        rag["persist_dir"] = ""
+
+    no_context_message = rag.get("no_context_message", "")
+    if no_context_message and not isinstance(no_context_message, str):
+        messages.append("Invalid rag.no_context_message; using default.")
+        rag["no_context_message"] = ""
+
+    source_dirs = rag.get("source_dirs", ["docs", "."])
+    if not isinstance(source_dirs, list) or not all(isinstance(d, str) for d in source_dirs):
+        messages.append("Invalid rag.source_dirs; defaulting to ['docs', '.'].")
+        rag["source_dirs"] = ["docs", "."]
+
+    sanitized["rag"] = rag
+
+    # 4. Voice Layer Validation (active-session / wake-gate settings)
     voice = dict(sanitized.get("voice", {}))
 
     raw_wake_required = voice.get("wake_word_required", True)
@@ -170,6 +231,44 @@ def validate_config(config: dict) -> Tuple[bool, dict, list[str]]:
             )
 
     sanitized["voice"] = voice
+
+    # 5. Research Layer Validation (optional subsystem — fails closed to OFF)
+    research = dict(sanitized.get("research", {}))
+
+    raw_enabled = research.get("enabled", False)
+    if not isinstance(raw_enabled, bool):
+        messages.append(f"Invalid research.enabled {raw_enabled!r}; defaulting to False.")
+        research["enabled"] = False
+    else:
+        research["enabled"] = raw_enabled
+
+    provider = research.get("provider", "duckduckgo")
+    if not isinstance(provider, str) or not provider.strip():
+        messages.append(f"Invalid research.provider {provider!r}; defaulting to 'duckduckgo'.")
+        provider = "duckduckgo"
+    research["provider"] = provider
+
+    for key, lo, hi, default in (("max_results", 1, 20, 5), ("max_queries", 1, 5, 3)):
+        val = research.get(key, default)
+        if not isinstance(val, (int, float)):
+            messages.append(f"Invalid research.{key} {val!r}; defaulting to {default}.")
+            research[key] = default
+        else:
+            research[key] = max(lo, min(hi, int(val)))
+
+    timeout = research.get("timeout", 10)
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        messages.append(f"Invalid research.timeout {timeout!r}; defaulting to 10.")
+        research["timeout"] = 10.0
+    else:
+        research["timeout"] = float(max(1.0, min(60.0, timeout)))
+
+    if not isinstance(research.get("api_key", ""), str):
+        research["api_key"] = ""
+    if not isinstance(research.get("prefer_official", False), bool):
+        research["prefer_official"] = False
+
+    sanitized["research"] = research
 
     # Log any configuration sanitization messages
     for msg in messages:

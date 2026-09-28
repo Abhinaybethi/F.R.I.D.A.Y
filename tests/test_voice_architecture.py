@@ -126,7 +126,7 @@ class StubSessionManager:
         self.stop_session()
         return False
 
-    def listen_once(self):
+    def listen_once(self, initial_chunks=None):
         if not self.transcripts:
             return ""
         return self.transcripts.pop(0)

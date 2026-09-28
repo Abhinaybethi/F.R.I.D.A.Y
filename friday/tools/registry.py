@@ -121,6 +121,14 @@ def execute(
 
     exec_success = raw_result.get("success", False)
     logger.info("[TOOL] Finished: success=%s", exec_success)
+    if a in (Action.SEARCH_WEB, Action.PLAY_VIDEO):
+        res_items = (raw_result.get("results") or []) if isinstance(raw_result, dict) else []
+        exec_status_tag = "SUCCESS" if (exec_success and res_items) else ("EMPTY" if exec_success else "FAILED")
+        app_for_search = ((intent.arguments or {}).get("application", "")) if intent else ""
+        logger.info(
+            "[TOOL] name=%s query=%r application=%r status=%s results=%d",
+            a.name, t, app_for_search, exec_status_tag, len(res_items),
+        )
     exec_status = ExecutionStatus.SUCCESS if exec_success else ExecutionStatus.FAILED
     exec_msg = raw_result.get("message", "Done." if exec_success else "Execution failed.")
     exec_spoken = raw_result.get("spoken_message", "")
@@ -183,7 +191,12 @@ def _dispatch(action: Action, target: str, is_dry_run: bool, intent: Optional[In
         return browser.read_website(target, dry_run=is_dry_run)
 
     if action == Action.SEARCH_WEB:
-        return browser.search_web(target, dry_run=is_dry_run)
+        args = (intent.arguments if intent else {}) or {}
+        return browser.search_web(
+            target,
+            application=args.get("application", ""),
+            dry_run=is_dry_run,
+        )
 
     if action == Action.PLAY_VIDEO:
         return browser.play_youtube(target, dry_run=is_dry_run)

@@ -22,6 +22,13 @@ _WEBSITE_URLS: dict[str, str] = {
 
 _SEARCH_URL = "https://www.google.com/search?q={}"
 
+# Queries that ask about CURRENT events benefit from limiting results to the
+# last week ("latest news", "today", "current X", "breaking ...").
+_NEWSY_QUERY = re.compile(
+    r"\b(latest|breaking|most\s+recent|recent|now|today|tonight|this\s+week|"
+    r"current|updates?)\b", re.IGNORECASE,
+)
+
 
 _BLOCKED_DOMAINS = {
     "evil.com", "www.evil.com",
@@ -345,10 +352,15 @@ def play_youtube(query: str, dry_run: bool = True) -> dict:
     }
 
 
-def search_web(query: str, dry_run: bool = True) -> dict:
+def search_web(query: str, dry_run: bool = True, application: str = "") -> dict:
     """
     Perform a web search for ``query``.
     Returns structured results list with stable result IDs and in-memory TTL caching.
+
+    ``application`` is an optional browser preference parsed from the user's
+    phrasing ("search for X on chrome"). In real mode the favoured browser is
+    opened first (best-effort); the search URL is always opened via the default
+    browser.
     """
     if not query or not query.strip():
         return {"success": False, "message": "Empty search query."}
@@ -357,6 +369,16 @@ def search_web(query: str, dry_run: bool = True) -> dict:
     query_key = query_str.lower()
     safe_query = quote_plus(query_str)
     url = _SEARCH_URL.format(safe_query)
+
+    app_name = (application or "").strip().lower()
+    if app_name and not dry_run:
+        try:
+            from friday.tools.apps import open_app  # lazy: avoid import cycles
+            opened = open_app(app_name, dry_run=False)
+            if opened.get("success"):
+                logger.info("[TOOL] Opened application for search: %r", app_name)
+        except Exception as e:
+            logger.info("Could not open application %r before search: %s", app_name, e)
 
     if dry_run:
         dummy_results = [
@@ -378,7 +400,10 @@ def search_web(query: str, dry_run: bool = True) -> dict:
     if query_key in _SEARCH_CACHE:
         cached_time, cached_results = _SEARCH_CACHE[query_key]
         if (now - cached_time) < _CACHE_TTL_SECONDS and cached_results:
-            logger.info("Search cache hit for %r (%d results)", query_str, len(cached_results))
+            logger.info(
+                "[SEARCH] query=%r latency_ms=%.0f results=%d cached=True",
+                query_str, (time.time() - now) * 1000.0, len(cached_results),
+            )
             titles = [r.get("title", "") for r in cached_results if r.get("title")]
             spoken = f"I found {len(cached_results)} search results for {query_str}: " + "; ".join(titles) + "."
             return {
@@ -390,16 +415,26 @@ def search_web(query: str, dry_run: bool = True) -> dict:
             }
 
     results = []
+    provider_logged = False
     # Attempt 1: DuckDuckGo API with retry (ddgs is the current package name;
     # duckduckgo_search is the legacy name — try ddgs first)
     for attempt in range(2):
         try:
             try:
                 from ddgs import DDGS
+                provider_desc = "ddgs"
             except ImportError:
                 from duckduckgo_search import DDGS
+                provider_desc = "duckduckgo_search (legacy)"
+            if not provider_logged:
+                logger.info("[SEARCH] provider=%s loaded", provider_desc)
+                provider_logged = True
+            timelimit = "w" if _NEWSY_QUERY.search(query_str) else None
             with DDGS() as ddgs:
-                for idx, r in enumerate(ddgs.text(query_str, max_results=3)):
+                kwargs = {"max_results": 3}
+                if timelimit:
+                    kwargs["timelimit"] = timelimit
+                for idx, r in enumerate(ddgs.text(query_str, **kwargs)):
                     results.append({
                         "id": f"result_{idx + 1}",
                         "title": r.get("title", ""),
@@ -408,6 +443,26 @@ def search_web(query: str, dry_run: bool = True) -> dict:
                     })
                 if results:
                     break
+        except TypeError:
+            # ddgs < 8.x signature: text(query, max_results) — retry without
+            # the timelimit keyword.
+            if timelimit:
+                timelimit = None
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    for idx, r in enumerate(ddgs.text(query_str, max_results=3)):
+                        results.append({
+                            "id": f"result_{idx + 1}",
+                            "title": r.get("title", ""),
+                            "summary": r.get("body", ""),
+                            "url": r.get("href", ""),
+                        })
+                    break
+            else:
+                logger.warning("Web search API attempt %d failed (TypeError)", attempt + 1)
         except Exception as e:
             logger.warning("Web search API attempt %d failed: %s", attempt + 1, e)
             if attempt == 0:
@@ -442,6 +497,10 @@ def search_web(query: str, dry_run: bool = True) -> dict:
             logger.warning("Web search HTML fallback failed: %s", e_fallback)
 
     if not results:
+        logger.info(
+            "[SEARCH] query=%r latency_ms=%.0f results=0 cached=False",
+            query_str, (time.time() - now) * 1000.0,
+        )
         spoken = f"I couldn't find any results for {query_str}."
         logger.info("Searched: %s (0 results)", query_str)
         return {
@@ -454,6 +513,11 @@ def search_web(query: str, dry_run: bool = True) -> dict:
     # Store in cache
     _SEARCH_CACHE[query_key] = (now, results)
 
+    latency_ms = (time.time() - now) * 1000.0
+    logger.info(
+        "[SEARCH] query=%r latency_ms=%.0f results=%d cached=False",
+        query_str, latency_ms, len(results),
+    )
     titles = [r.get("title", "") for r in results if r.get("title")]
     spoken = f"I found {len(results)} search results for {query_str}: " + "; ".join(titles) + "."
     logger.info("Searched: %s (%d results)", query_str, len(results))

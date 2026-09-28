@@ -11,3 +11,10 @@ models/
 .data/
 pipeline_metrics.txt
 stress_metrics.txt
+# Runtime data
+data/chroma/
+logs/*.log
+logs/*.log.*
+
+# Keep the directory
+!logs/.gitkeep

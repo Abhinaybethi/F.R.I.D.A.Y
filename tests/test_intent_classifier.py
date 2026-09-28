@@ -73,10 +73,21 @@ def test_context_references():
 
 def test_simple_commands():
     # Deterministic simple commands stay out of chat/reasoner entirely.
-    assert cls("open chrome") == RequestClass.UNKNOWN
+    assert cls("open chrome") == RequestClass.TOOL_REQUEST
     assert cls("hi") == RequestClass.UNKNOWN
-    assert cls("open youtube") == RequestClass.UNKNOWN
+    assert cls("open youtube") == RequestClass.TOOL_REQUEST
     assert cls("what time is it") == RequestClass.QUESTION  # knowledge-ish, router resolves
+
+
+def test_casual_chatter_is_conversational():
+    # Pure acknowledgments never trigger the reasoner (P12).
+    assert cls("thanks") == RequestClass.CONVERSATIONAL
+    assert cls("thank you") == RequestClass.CONVERSATIONAL
+    assert cls("sounds good") == RequestClass.CONVERSATIONAL
+    assert cls("you're awesome") == RequestClass.CONVERSATIONAL
+    assert cls("good night") == RequestClass.CONVERSATIONAL
+    assert cls("what do you mean") == RequestClass.FOLLOW_UP
+    assert cls("and then") == RequestClass.FOLLOW_UP
 
 
 def test_compound_commands_need_command_verbs():
@@ -96,4 +107,5 @@ def test_recall_phrase_stays_knowledge(self=None):
     # "what is my schedule" is memory, but plain "what is java" must NOT be
     # captured by RECALL-style patterns — it remains a QUESTION.
     assert cls("what is my schedule") == RequestClass.QUESTION
-    assert cls("recall my java notes") == RequestClass.UNKNOWN
+    # "recall X" is a concrete memory tool — deterministic router, no LLM.
+    assert cls("recall my java notes") == RequestClass.TOOL_REQUEST

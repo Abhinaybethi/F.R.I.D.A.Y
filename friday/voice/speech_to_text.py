@@ -1,4 +1,5 @@
 import time
+from types import SimpleNamespace
 import numpy as np
 
 from faster_whisper import WhisperModel
@@ -10,6 +11,20 @@ logger = get_logger(__name__)
 # Silent 1-second audio used for the warm-up run after model load.
 # Runs CTranslate2 kernel compilation so the first real utterance is not penalised.
 _WARMUP_AUDIO = np.zeros(16000, dtype=np.float32)
+
+
+def _quality_ok(avg_logprob, no_speech_prob):
+    """
+    Gate a transcription on Whisper's confidence metadata.
+
+    Returns True when the metadata is missing (mocks / older models) or when
+    Whisper is genuinely confident the audio contained speech (P7):
+      - no_speech_prob < 0.9  (model didn't think it was silence)
+      - avg_logprob   > -2.0  (tokens decoded with reasonable probability)
+    """
+    if avg_logprob is None or no_speech_prob is None:
+        return True
+    return no_speech_prob < 0.9 and avg_logprob > -2.0
 
 
 def _cuda_is_usable() -> bool:
@@ -139,22 +154,65 @@ class SpeechToText:
             text  — lower-cased transcript, or "" if nothing was recognised.
             rtf   — transcription_time / audio_duration (lower is faster).
         """
+        text, rtf, _ = self._transcribe_impl(audio)
+        return text, rtf
+
+    def transcribe_detailed(self, audio: np.ndarray):
+        """
+        Transcribe ``audio`` and return Whisper confidence metadata (P7).
+
+        Returns
+        -------
+        (text, rtf, meta)
+            text  — lower-cased transcript, or "" if nothing was recognised.
+            rtf   — transcription_time / audio_duration (lower is faster).
+            meta  — SimpleNamespace with:
+                    avg_logprob  — worst-segment log-probability (None if absent)
+                    no_speech_prob — worst-segment no-speech estimate (None if absent)
+                    quality_ok  — _quality_ok(avg_logprob, no_speech_prob)
+        """
+        text, rtf, rows = self._transcribe_impl(audio)
+        avg = min((r[0] for r in rows if r[0] is not None), default=None)
+        noise = max((r[1] for r in rows if r[1] is not None), default=None)
+        meta = SimpleNamespace(
+            avg_logprob=avg,
+            no_speech_prob=noise,
+            quality_ok=_quality_ok(avg, noise),
+            model=self.model_size,
+        )
+        return text, rtf, meta
+
+    def _transcribe_impl(self, audio: np.ndarray) -> tuple[str, float, list]:
+        """
+        Core transcription shared by ``transcribe`` and ``transcribe_detailed``.
+
+        Returns ``(text, rtf, rows)`` where each row is
+        ``(segment.avg_logprob, segment.no_speech_prob)``.
+        """
         if self.model is None or audio is None or len(audio) == 0:
-            return "", 0.0
+            return "", 0.0, []
 
         audio_sec = len(audio) / 16000
         t0 = time.perf_counter()
 
-        try:
+        def _decode(audio_in):
             segs, _ = self.model.transcribe(
-                audio,
+                audio_in,
                 language=self.language,
                 beam_size=1,
                 temperature=0,
                 condition_on_previous_text=False,
                 vad_filter=False,
             )
-            text = "".join(s.text for s in segs).strip().lower()
+            rows = []
+            parts = []
+            for s in segs:
+                parts.append(s.text)
+                rows.append((getattr(s, "avg_logprob", None), getattr(s, "no_speech_prob", None)))
+            return "".join(parts).strip().lower(), rows
+
+        try:
+            text, rows = _decode(audio)
         except Exception as e:
             err = str(e)
             logger.error("[STT] Transcription error: %s", err)
@@ -167,22 +225,14 @@ class SpeechToText:
                 if self.model:
                     self._warmup()
                     try:
-                        segs, _ = self.model.transcribe(
-                            audio,
-                            language=self.language,
-                            beam_size=1,
-                            temperature=0,
-                            condition_on_previous_text=False,
-                            vad_filter=False,
-                        )
-                        text = "".join(s.text for s in segs).strip().lower()
+                        text, rows = _decode(audio)
                     except Exception as e2:
                         logger.error("[STT] CPU retry failed: %s", e2)
-                        return "", 0.0
+                        return "", 0.0, []
                 else:
-                    return "", 0.0
+                    return "", 0.0, []
             else:
-                return "", 0.0
+                return "", 0.0, []
 
         elapsed = time.perf_counter() - t0
         rtf = elapsed / audio_sec if audio_sec > 0 else 0.0
@@ -190,4 +240,4 @@ class SpeechToText:
             "[STT] Done | audio=%.1fs | transcription=%.2fs | RTF=%.2f",
             audio_sec, elapsed, rtf,
         )
-        return text, rtf
+        return text, rtf, rows

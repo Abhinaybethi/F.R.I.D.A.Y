@@ -41,6 +41,7 @@ class VoiceState(Enum):
     PROCESSING = auto()
     EXECUTING = auto()
     SPEAKING = auto()
+    INTERRUPTED = auto()
 
 
 # Valid progressions through the voice lifecycle.
@@ -48,9 +49,10 @@ _VALID_TRANSITIONS: dict[VoiceState, tuple[VoiceState, ...]] = {
     VoiceState.IDLE: (VoiceState.WAKE_DETECTED,),
     VoiceState.WAKE_DETECTED: (VoiceState.COMMAND_LISTENING, VoiceState.PROCESSING, VoiceState.IDLE),
     VoiceState.COMMAND_LISTENING: (VoiceState.PROCESSING, VoiceState.IDLE),
-    VoiceState.PROCESSING: (VoiceState.EXECUTING, VoiceState.SPEAKING, VoiceState.IDLE),
-    VoiceState.EXECUTING: (VoiceState.SPEAKING, VoiceState.IDLE),
-    VoiceState.SPEAKING: (VoiceState.IDLE, VoiceState.COMMAND_LISTENING),
+    VoiceState.PROCESSING: (VoiceState.EXECUTING, VoiceState.SPEAKING, VoiceState.IDLE, VoiceState.INTERRUPTED),
+    VoiceState.EXECUTING: (VoiceState.SPEAKING, VoiceState.IDLE, VoiceState.INTERRUPTED),
+    VoiceState.SPEAKING: (VoiceState.IDLE, VoiceState.COMMAND_LISTENING, VoiceState.INTERRUPTED),
+    VoiceState.INTERRUPTED: (VoiceState.COMMAND_LISTENING, VoiceState.IDLE, VoiceState.PROCESSING),
 }
 
 

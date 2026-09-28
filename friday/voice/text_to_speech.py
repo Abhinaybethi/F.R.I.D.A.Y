@@ -99,47 +99,63 @@ class TextToSpeech:
     def speak(self, text: str) -> None:
         if not text:
             return
-            
+
         clean_text = self._clean_for_speech(text)
         if not clean_text:
             return
 
         logger.info("[TTS] Speaking response: %r", clean_text)
         print(f"Friday: {clean_text}")
-        
+
         self.abort_event.clear()
         self._is_speaking = True
-        
+
         try:
-            if self.engine_name == "kokoro" and self.kokoro is not None:
-                try:
-                    self._speak_kokoro(clean_text)
-                    return
-                except Exception as e:
-                    logger.warning("Kokoro TTS failed during synthesis: %s", e)
-            elif self.engine_name == "piper" and self.piper is not None:
-                try:
-                    self._speak_piper(clean_text)
-                    return
-                except Exception as e:
-                    import traceback
-                    logger.warning("Piper TTS failed during synthesis: %s\n%s", e, traceback.format_exc())
-            
-            # Fallbacks
-            if self.fallback_engine == "kokoro" and self.kokoro is not None:
-                try:
-                    self._speak_kokoro(clean_text)
-                    return
-                except Exception as e:
-                    logger.error("Kokoro fallback failed: %s", e)
-            elif self.fallback_engine == "piper" and self.piper is not None:
-                try:
-                    self._speak_piper(clean_text)
-                    return
-                except Exception as e:
-                    logger.error("Piper fallback failed: %s", e)
+            units, synth_seconds, playback_seconds = self._synthesize(clean_text)
         finally:
             self._is_speaking = False
+
+        # Per-request aggregation so a response's TTS work is attributable to
+        # a single request_id (P10). Fallback only re-synthesizes when the
+        # primary engine produced ZERO units (never a partial response).
+        from friday.utils.logger import request_id_var
+        req = request_id_var.get()
+        logger.info(
+            "[TTS] response complete: request_id=%s units=%d synthesis=%.0fms "
+            "playback_total=%.0fms",
+            req, units, synth_seconds * 1000.0, playback_seconds * 1000.0,
+        )
+
+    def _synthesize(self, text: str):
+        """
+        Run the primary engine, falling back ONLY when it produced no audio
+        (units == 0). Returns (units, synthesis_seconds, playback_seconds).
+        """
+        primaries = []
+        if self.engine_name == "kokoro" and self.kokoro is not None:
+            primaries.append(("kokoro", self._speak_kokoro))
+        elif self.engine_name == "piper" and self.piper is not None:
+            primaries.append(("piper", self._speak_piper))
+
+        fallbacks = []
+        if self.fallback_engine == "kokoro" and self.kokoro is not None:
+            fallbacks.append(("kokoro", self._speak_kokoro))
+        elif self.fallback_engine == "piper" and self.piper is not None:
+            fallbacks.append(("piper", self._speak_piper))
+
+        tried = set()
+        for name, method in primaries + fallbacks:
+            if name in tried:
+                continue
+            tried.add(name)
+            try:
+                units, synth_seconds, playback_seconds = method(text)
+            except Exception as e:
+                logger.warning("TTS %s failed during synthesis: %s", name, e)
+                continue
+            if units and units > 0:
+                return units, synth_seconds, playback_seconds
+        return 0, 0.0, 0.0
 
     def _play_interruptible(self, data, fs):
         duration = len(data) / fs
@@ -155,43 +171,65 @@ class TextToSpeech:
 
     def _speak_kokoro(self, text: str):
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()] or [text]
+        units = 0
+        synth_seconds = 0.0
+        playback_seconds = 0.0
         for s in sentences:
             if self.abort_event.is_set():
                 break
-            t0 = time.time()
-            samples, sample_rate = self.kokoro.create(s, voice=self.voice, speed=self.speed, lang="en-us")
+            try:
+                t0 = time.time()
+                samples, sample_rate = self.kokoro.create(s, voice=self.voice, speed=self.speed, lang="en-us")
+                if self.abort_event.is_set():
+                    break
+                t1 = time.time()
+                duration = len(samples) / sample_rate
+                rtf = (t1 - t0) / duration if duration > 0 else 0
+                logger.info("[TTS] Kokoro synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+                synth_seconds += t1 - t0
+                playback_seconds += duration
+
+                self._play_interruptible(samples, sample_rate)
+                units += 1
+            except Exception as e:
+                logger.warning("[TTS] Kokoro failed mid-response at unit %d: %s", units + 1, e)
+                break
             if self.abort_event.is_set():
                 break
-            t1 = time.time()
-            duration = len(samples) / sample_rate
-            rtf = (t1 - t0) / duration if duration > 0 else 0
-            logger.info("[TTS] Kokoro synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
-            
-            self._play_interruptible(samples, sample_rate)
-            if self.abort_event.is_set():
-                break
+        return units, synth_seconds, playback_seconds
 
     def _speak_piper(self, text: str):
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()] or [text]
+        units = 0
+        synth_seconds = 0.0
+        playback_seconds = 0.0
         for s in sentences:
             if self.abort_event.is_set():
                 break
-            t0 = time.time()
-            wav_io = io.BytesIO()
-            with wave.open(wav_io, "wb") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(self.piper.config.sample_rate)
-                self.piper.synthesize_wav(s, wav_file)
+            try:
+                t0 = time.time()
+                wav_io = io.BytesIO()
+                with wave.open(wav_io, "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(self.piper.config.sample_rate)
+                    self.piper.synthesize_wav(s, wav_file)
+                if self.abort_event.is_set():
+                    break
+                wav_io.seek(0)
+                data, fs = sf.read(wav_io)
+                t1 = time.time()
+                duration = len(data) / fs
+                rtf = (t1 - t0) / duration if duration > 0 else 0
+                logger.info("[TTS] Piper synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
+                synth_seconds += t1 - t0
+                playback_seconds += duration
+
+                self._play_interruptible(data, fs)
+                units += 1
+            except Exception as e:
+                logger.warning("[TTS] Piper failed mid-response at unit %d: %s", units + 1, e)
+                break
             if self.abort_event.is_set():
                 break
-            wav_io.seek(0)
-            data, fs = sf.read(wav_io)
-            t1 = time.time()
-            duration = len(data) / fs
-            rtf = (t1 - t0) / duration if duration > 0 else 0
-            logger.info("[TTS] Piper synthesis=%.2fs audio=%.2fs RTF=%.2f", t1 - t0, duration, rtf)
-            
-            self._play_interruptible(data, fs)
-            if self.abort_event.is_set():
-                break
+        return units, synth_seconds, playback_seconds

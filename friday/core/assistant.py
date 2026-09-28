@@ -14,20 +14,24 @@ With `voice.wake_word_required: false`, the assistant is hands-free and every
 legible transcript streams straight into the same pipeline as text mode.
 """
 import os
+import time
 import yaml
 
 from friday.voice.session_manager import VoiceSessionManager, _NO_SPEECH
 from friday.voice.text_to_speech import TextToSpeech
 from friday.core.wake_word import WakeWordListener
 from friday.core.conversation import ConversationManager, ConversationState
+from friday.core.natural_conversation import NaturalConversationRouter
 from friday.voice.state_machine import VoiceState, VoiceStateMachine
 from friday.intent.normalizer import normalize
 from friday.reasoning.interface import Reasoner
 from friday.reasoning.local_reasoner import OllamaReasoner
 from friday.reasoning.llamacpp_reasoner import LlamaCppReasoner
 from friday.reasoning.llamacpp_server import LlamaCppServerManager
-from friday.utils.logger import get_logger
+from friday.utils.logger import get_logger, close_logging
 from friday.utils.config_validator import validate_config
+from friday.rag.models import RAGConfig
+from friday.rag.service import RAGService
 
 
 def _build_reasoner(reasoning_cfg: dict) -> Reasoner:
@@ -47,6 +51,66 @@ def _build_reasoner(reasoning_cfg: dict) -> Reasoner:
     model = reasoning_cfg.get("model") or "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"
     timeout = float(reasoning_cfg.get("timeout", 30))
     return LlamaCppReasoner(base_url=base_url, model=model, timeout=timeout)
+
+
+# Pure TTS-cancellation utterances. When spoken while Friday is talking these
+# stop playback and return to listening WITHOUT being routed as a command
+# (so `wait` doesn't end the session or invoke the reasoner).
+_TTS_INTERRUPT_WORDS = {
+    "wait", "hold on", "thats enough", "that's enough", "enough",
+    "ok stop", "okay stop", "stop talking", "quiet",
+}
+
+
+def _is_interrupt_utterance(transcript: str) -> bool:
+    """True for a word-level 'stop the speech' utterance (not a session stop)."""
+    from friday.intent.normalizer import normalize
+    return normalize(transcript) in _TTS_INTERRUPT_WORDS
+
+
+def _build_research_agent(research_cfg: dict = None):
+    """Construct the research subsystem agent, or None when disabled."""
+    try:
+        from friday.research.agent import ResearchAgent
+        from friday.research.config import ResearchConfig
+
+        config = ResearchConfig.from_mapping(research_cfg)
+        return ResearchAgent(config=config)
+    except Exception as exc:
+        assistant_logger = get_logger("friday")
+        assistant_logger.warning("[RESEARCH] disabled: %s", exc)
+        return None
+
+
+def _build_rag_service(rag_cfg: dict = None):
+    """Construct RAGService from config, or None when disabled."""
+    if not rag_cfg or not rag_cfg.get("enabled", True):
+        return None
+    try:
+        cfg = RAGConfig(
+            enabled=bool(rag_cfg.get("enabled", True)),
+            collection=str(rag_cfg.get("collection", "friday_knowledge")),
+            persist_dir=str(rag_cfg.get("persist_dir", "")),
+            retrieval_k=int(rag_cfg.get("retrieval_k", 15)),
+            final_k=int(rag_cfg.get("final_k", 5)),
+            similarity_threshold=float(rag_cfg.get("similarity_threshold", 0.72)),
+            relevance_min_score=float(rag_cfg.get("relevance_min_score", 0.30)),
+            rerank=bool(rag_cfg.get("rerank", True)),
+            hybrid=bool(rag_cfg.get("hybrid", True)),
+            bm25_k1=float(rag_cfg.get("bm25_k1", 1.5)),
+            bm25_b=float(rag_cfg.get("bm25_b", 0.75)),
+            context_compression=bool(rag_cfg.get("context_compression", True)),
+            max_context_tokens=int(rag_cfg.get("max_context_tokens", 3000)),
+            no_context_message=str(rag_cfg.get("no_context_message", "")),
+            auto_ingest=bool(rag_cfg.get("auto_ingest", True)),
+            source_dirs=list(rag_cfg.get("source_dirs", ["docs", "."])),
+            include_md=bool(rag_cfg.get("include_md", True)),
+        )
+        return RAGService(cfg)
+    except Exception as e:
+        logger = get_logger("friday")
+        logger.warning("[STARTUP] RAG disabled: %s", e)
+        return None
 
 
 class Friday:
@@ -118,7 +182,12 @@ class Friday:
             permissions=self._permissions,
             reasoner=self.reasoner,
             conversation_timeout_seconds=voice_cfg_top.get("conversation_timeout_seconds", 300),
+            rag_service=_build_rag_service(self.config.get("rag", {})),
+            research_agent=_build_research_agent(self.config.get("research", {})),
+            natural_conversation_router=NaturalConversationRouter.from_config(self.config),
         )
+        if getattr(self.conversation_manager, "rag_service", None):
+            self.conversation_manager.rag_service.start_background_ingest()
 
         # Text mode skips all voice components (mic/VAD/STT/TTS/wake-word).
         self.tts = None
@@ -187,13 +256,31 @@ class Friday:
         if self.conversation_manager.state == ConversationState.PAUSED:
             return True
 
+        t_start = time.perf_counter()
         response, keep_running = self._process_transcript(transcript)
+        process_ms = (time.perf_counter() - t_start) * 1000
         self.voice_state.transition_to(VoiceState.EXECUTING)
+        tts_ms = 0.0
         if response and self.tts is not None:
             self.voice_state.transition_to(VoiceState.SPEAKING)
+            # Start persistent barge-in listener for the duration of the active
+            # session; it will be re-started each response while the session is
+            # active, allowing interruption across multiple turns.
             self.async_session.start_barge_in_listener()
-            self.tts.speak(response)
-            self.async_session.stop_barge_in_listener()
+            t_tts = time.perf_counter()
+            try:
+                self.tts.speak(response)
+            except Exception as e:
+                self.logger.error("[TTS] Playback failed: %s", e)
+            finally:
+                tts_ms = (time.perf_counter() - t_tts) * 1000
+            # Barge-in listener is NOT stopped here; it is re-started (or left
+            # running) by the main loop when the session state transitions back
+            # to LISTENING, so interruption can happen across consecutive turns.
+        self.logger.info(
+            "[PERF] process=%.1fms tts=%.1fms total=%.1fms response=%r",
+            process_ms, tts_ms, process_ms + tts_ms, response,
+        )
         return keep_running
 
     def run_text(self):
@@ -243,6 +330,27 @@ class Friday:
             return False
         norm = normalize(stripped)
         return bool(norm) and norm != "no clear speech detected"
+
+    def _note_non_legible(self):
+        """Log a skipped illegible transcript at INFO once per 60s, then at
+        DEBUG — noise frames must not spam request logs (P9)."""
+        now = time.monotonic()
+        first = not hasattr(self, "_last_non_legible_log")
+        last = getattr(self, "_last_non_legible_log", 0.0)
+        self._last_non_legible_log = now
+        if first:
+            self.logger.info(
+                "[VOICE] Speech detected but no legible transcript; returning to listening."
+            )
+        elif now - last >= 60.0:
+            self.logger.info(
+                "[VOICE] Speech detected but no legible transcript; returning to listening (throttled)."
+            )
+        else:
+            self.logger.debug(
+                "[VOICE] Skipped illegible transcript in %.0fs since last report",
+                now - last,
+            )
 
     def _ack_wake(self):
         """Brief acknowledgment after a bare wake word ('friday' -> 'Yes?')."""
@@ -320,6 +428,7 @@ class Friday:
 
         with self.session_manager:
             self.conversation_manager.start_session()
+            pending_barge_in_audio = None
             while True:
                 if self.conversation_manager.state == ConversationState.PAUSED:
                     import time
@@ -329,7 +438,8 @@ class Friday:
                 # In confirmation state, bypass wake word listening and directly capture confirmation answer
                 if self.conversation_manager.state == ConversationState.WAITING_FOR_CONFIRMATION:
                     self.logger.info("Waiting for confirmation response...")
-                    transcript = self.session_manager.listen_once()
+                    initial_audio, pending_barge_in_audio = pending_barge_in_audio, None
+                    transcript = self.session_manager.listen_once(initial_chunks=initial_audio)
                 else:
                     # Active session? Then no wake word is required for each
                     # command — stay in COMMAND_LISTENING until it expires.
@@ -360,7 +470,8 @@ class Friday:
                         self.voice_state.transition_to(
                             VoiceState.COMMAND_LISTENING if session_active else VoiceState.IDLE
                         )
-                        transcript = self.session_manager.listen_once()
+                        initial_audio, pending_barge_in_audio = pending_barge_in_audio, None
+                        transcript = self.session_manager.listen_once(initial_chunks=initial_audio)
                         if session_active:
                             stripped = self._strip_wake_prefix(transcript)
                             if stripped == "" and transcript:
@@ -372,16 +483,36 @@ class Friday:
                 import uuid
                 from friday.utils.logger import request_id_var
                 req_id = uuid.uuid4().hex[:8]
-                request_id_var.set(req_id)
-                self.logger.info("New request started: %r", transcript)
 
                 # Debounce background noise / empty STT fragments / no-legible-speech
                 if not self._is_legible(transcript):
-                    self.logger.info("[VOICE] Speech detected but no legible transcript; returning to listening.")
+                    # Request id + "New request started" are logged AFTER the
+                    # legibility gate so VAD noise bursts never spin request ids
+                    # or spam the request log (P9).
+                    self._note_non_legible()
                     self.voice_state.transition_to(
                         VoiceState.COMMAND_LISTENING
                         if self.conversation_manager.session.is_active() else VoiceState.IDLE
                     )
+                    continue
+
+                request_id_var.set(req_id)
+                self.logger.info("New request started: %r", transcript)
+
+                # Word-level TTS cancellation: "wait" / "that's enough" just stop
+                # speech and return to listening — never routed as a command.
+                if _is_interrupt_utterance(transcript):
+                    self.logger.info("[VOICE] Interrupt utterance: %r", transcript)
+                    if self.tts is not None and self.tts.is_speaking():
+                        self.tts.stop()
+                    self.voice_state.transition_to(VoiceState.INTERRUPTED)
+                    self.voice_state.transition_to(
+                        VoiceState.COMMAND_LISTENING
+                        if self.conversation_manager.session.is_active() else VoiceState.IDLE
+                    )
+                    if self.async_session is not None and self.async_session.is_barge_in_triggered():
+                        self.async_session.stop_barge_in_listener()
+                        pending_barge_in_audio = self.async_session.take_barge_in_audio()
                     continue
 
                 self.voice_state.transition_to(VoiceState.PROCESSING)
@@ -389,6 +520,25 @@ class Friday:
                 if not keep_running:
                     self.voice_state.transition_to(VoiceState.IDLE)
                     break
+                # Check if user interrupted during TTS (barge-in triggered).
+                if self.async_session.is_barge_in_triggered():
+                    # User spoke while FRIDAY was talking — fall straight back
+                    # to listening, seeding the next listen with the audio
+                    # captured from the moment the interruption began so the
+                    # user's doubt is heard instead of discarded.
+                    self.async_session.stop_barge_in_listener()
+                    pending_barge_in_audio = self.async_session.take_barge_in_audio()
+                    self.logger.info(
+                        "[VOICE] Barge-in captured %d chunk(s); listening for the interrupt.", \
+                        len(pending_barge_in_audio),
+                    )
+                    self.voice_state.transition_to(VoiceState.INTERRUPTED)
+                    self.voice_state.transition_to(
+                        VoiceState.COMMAND_LISTENING
+                        if self.conversation_manager.session.is_active() else VoiceState.IDLE
+                    )
+                    # Skip the normal loop-back; go straight to next listen once.
+                    continue
                 # While the session is active, loop back to command listening —
                 # do NOT return to wake-word detection after every response.
                 if self.conversation_manager.session.is_active():
@@ -416,3 +566,4 @@ class Friday:
                 self.server_manager.stop()
             else:
                 self.logger.info("[SHUTDOWN] Leaving pre-existing llama.cpp server untouched (not owned by F.R.I.D.A.Y).")
+        close_logging()

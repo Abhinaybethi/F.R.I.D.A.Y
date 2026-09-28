@@ -37,7 +37,8 @@ class OllamaReasoner(Reasoner):
     def close(self):
         pass
         
-    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action",
+                retrieval_context: str = "") -> dict:
         if not self.is_available():
             return {"type": "unknown"}
             
@@ -52,6 +53,8 @@ class OllamaReasoner(Reasoner):
         user_prompt = f"Transcript: {transcript}\n\n"
         if context_str:
             user_prompt += f"Context:\n{context_str}\n"
+        if mode == "chat" and retrieval_context:
+            user_prompt += f"\n{retrieval_context}\n"
 
         if mode == "chat":
             system_prompt = CHAT_PROMPT

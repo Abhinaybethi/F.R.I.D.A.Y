@@ -5,13 +5,16 @@ Decides, BEFORE routing, what kind of user request arrived so the assistant
 picks the cheapest correct path:
 
   SESSION_CONTROL   wake/session tokens ("yes", "no", "cancel", "help")
-  EXIT              stop / quit / goodbye
+  EXIT              stop / quit / goodbye / bye / shutdown (deterministic)
   COMMAND           concrete command / compound multi-step request
   CONTEXT_REFERENCE follow-up reference that the deterministic context resolver
                     understands ("play it", "the first one", "close it")
   SCREEN_QUESTION    screen/vision query — answered truthfully as unavailable
+  FOLLOW_UP          bare follow-up ("what do you mean", "and then?") -> chat path
+  CONVERSATIONAL     chatter ("thanks", "okay", "good night") -> instant ack
   QUESTION           knowledge / explanation question -> reasoner CHAT mode
   CHAT               casual conversation -> reasoner CHAT mode
+  TOOL_REQUEST       concrete tool request (open/search/remember...) -> router, no LLM
   UNKNOWN            nothing meaningful
 
 Priority (lowest number first) mirrors the task's ordering: session control,
@@ -33,13 +36,18 @@ class RequestClass(Enum):
     COMMAND = auto()
     CONTEXT_REFERENCE = auto()
     SCREEN_QUESTION = auto()
+    FOLLOW_UP = auto()
+    CONVERSATIONAL = auto()
     QUESTION = auto()
     CHAT = auto()
+    TOOL_REQUEST = auto()
     UNKNOWN = auto()
 
 
 _EXIT = re.compile(
-    r"^(?:goodbye|stop|exit|quit|shut\s+down|stop\s+speaking)$", re.IGNORECASE
+    r"^(?:goodbye|good\s*bye|bye|stop|stop\s+friday|exit|quit|shut\s*down|"
+    r"see\s+you|that'?s?\s*all|thats\s*all|stop\s+speaking)$",
+    re.IGNORECASE,
 )
 
 _SESSION_CONTROL = re.compile(
@@ -106,6 +114,41 @@ _CHAT = re.compile(
 # Compound request markers — deterministic multi-step planning path.
 _COMPOUND_MARKERS = re.compile(r"\b(?:and|then|,\s*|;\s*)\b", re.IGNORECASE)
 
+# Bare conversational follow-ups ("what do you mean", "and then?", "why?",
+# "tell me more"). Full-string anchored so real questions stay QUESTION.
+_FOLLOW_UP = re.compile(
+    r"^(?:"
+    r"what\s+do(?:es)?\s+(?:you|we|it|they)\s+mean(?:\s+by\s+.+)?\??"
+    r"|what\s+about\s+(?:it|that|this)\??"
+    r"|(?:why|how|where|when|who|what)\??"
+    r"|(?:and\s+)?(?:then|after)\??|then\??|so\s+then\??|so\??|and\??"
+    r"|tell\s+me\s+more(?:\s+about\s+.+)?\??"
+    r"|(?:go\s+on|continue|expand\s+on\s+that|elaborate)"
+    r"|(?:huh|come\s+again|say\s+that\s+again)\??"
+    r")$",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Pure chatter / acknowledgments — reply instantly, never with the reasoner.
+_CONVERSATIONAL = re.compile(
+    r"^(?:"
+    r"thank\s*(?:you)?(?:\s+(?:very\s+much|a\s+lot))?(?:\s+friday)?"
+    r"|thanks(?:\s+(?:a\s+lot|friday))?"
+    r"|you(?:'?re| are)\s+(?:welcome|great|awesome|helpful|cool|amazing|the\s+best)"
+    r"|that'?s\s+(?:great|awesome|cool|nice|perfect|amazing|fine|good|right)"
+    r"|sounds\s+(?:good|great|awesome)"
+    r"|(?:ok|okay|alright|all\s+right|sure|got\s+it|understood|roger)\?*"
+    r"|good\s*night|goodnight|have\s+a\s+good\s+(?:day|night|evening)"
+    r")$",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Classify-only exclusion: routes that are NOT concrete tool actions even when
+# the router is confident about them (greetings, system tokens).
+_NON_TOOL_ACTIONS = {
+    "GREETING", "SYSTEM_STOP", "SYSTEM_CANCEL", "SYSTEM_HELP", "SYSTEM_REPEAT",
+}
+
 # A compound chunk only counts when at least one segment is a real command
 # ("open chrome, play jazz") — not "hi, how are you" or "well, I guess".
 _COMMAND_VERBS = re.compile(
@@ -139,19 +182,28 @@ def classify(transcript: str) -> RequestClass:
     if _SCREEN_QUESTION.match(raw) or _SCREEN_QUESTION.match(text):
         return RequestClass.SCREEN_QUESTION
 
-    # 4. Knowledge question ("what is X ...", "explain X")
+    # 4. Bare follow-up ("what do you mean", "and then?", "why?") — cheap
+    #    re-ask, resolved against context in conversation's chat path.
+    if _FOLLOW_UP.match(text):
+        return RequestClass.FOLLOW_UP
+
+    # 5. Knowledge question ("what is X ...", "explain X")
     if _QUESTION_START.match(text):
         return RequestClass.QUESTION
 
-    # 5. Casual chat
+    # 6. Casual chat
     if _CHAT.match(text):
         return RequestClass.CHAT
 
-    # 6. Context reference ("play it", "open the first one", "close it")
+    # 7. Chatter / acknowledgments — instant deterministic reply, no reasoner.
+    if _CONVERSATIONAL.match(text):
+        return RequestClass.CONVERSATIONAL
+
+    # 8. Context reference ("play it", "open the first one", "close it")
     if _CONTEXT_REF.match(text):
         return RequestClass.CONTEXT_REFERENCE
 
-    # 7. Compound multi-step command ("open chrome, play jazz").
+    # 9. Compound multi-step command ("open chrome, play jazz").
     #    This runs on the RAW transcript because normalize() strips commas.
     if (
         _COMPOUND_MARKERS.search(raw)
@@ -160,7 +212,21 @@ def classify(transcript: str) -> RequestClass:
     ):
         return RequestClass.COMMAND
 
-    # 8. Anything concrete (router will decide) vs unknown
+    # 10. Concrete tool request the deterministic router can execute without
+    #     the reasoner ("open chrome", "search for X", "remember Y").
+    try:
+        from friday.intent.router import route
+        intent = route(text)
+        if (
+            intent.action.name not in _NON_TOOL_ACTIONS
+            and intent.action.name != "UNKNOWN"
+            and intent.confidence >= 0.75
+        ):
+            return RequestClass.TOOL_REQUEST
+    except Exception:
+        pass
+
+    # 11. Anything else
     return RequestClass.UNKNOWN
 
 

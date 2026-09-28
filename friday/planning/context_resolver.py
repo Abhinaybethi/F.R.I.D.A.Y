@@ -5,6 +5,7 @@ import re
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 from friday.intent.models import Action
+from friday.intent.normalizer import normalize
 
 
 @dataclass
@@ -55,7 +56,7 @@ def resolve_context(transcript: str, context: ShortTermContext) -> tuple[str, st
     Returns:
         (resolved_transcript, error_message)
     """
-    text = transcript.lower().strip().rstrip(".!?").strip()
+    text = normalize(transcript).strip().rstrip(".!?").strip()
 
     if not text:
         return text, ""
@@ -166,8 +167,8 @@ def resolve_context(transcript: str, context: ShortTermContext) -> tuple[str, st
                         return f"play {url}", ""
                     return f"go to {url}", ""
             except IndexError:
-                return "", f"Result index {raw_idx} is out of range."
-        return "", "I don't have a result list to open."
+                return "", f"I only found {len(results)} results. Which one would you like?"
+        return "", "I don't have a recent video search to choose from. What should I search for?"
 
     # Backward compatibility for literal phrases
     if text in ("open the first result", "open the first one", "open result 1", "open first result"):

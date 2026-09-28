@@ -16,7 +16,7 @@ def test_context():
     
     # Test 2: "open the first result" with no results
     res, err = resolve_context("open the first result", ctx)
-    assert err == "I don't have a result list to open."
+    assert err == "I don't have a recent video search to choose from. What should I search for?"
     assert not res
     
     # Test 3: "open the first result" with results

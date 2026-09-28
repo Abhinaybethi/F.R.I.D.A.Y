@@ -25,11 +25,25 @@ class AsyncVoiceSessionManager:
         self._monitor_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._barge_in_triggered = False
+        # Captured mic chunks from the moment the user interrupts TTS output.
+        # Handed to the main loop so the interrupt utterance is NOT lost to
+        # AudioInput.drain() on the next listen (barge-in continuity).
+        self._barge_capture_max = 24  # ~0.75s @ 512/16k — bounds memory
+        self._barge_in_chunks: list = []
+
+    def take_barge_in_audio(self) -> list:
+        """Return captured interrupt audio and reset the barge-in state."""
+        chunks = list(self._barge_in_chunks)
+        self._barge_in_chunks = []
+        self._barge_in_triggered = False
+        return chunks
 
     def start_barge_in_listener(self):
         """Start background VAD monitoring thread while TTS is outputting audio."""
         self._stop_event.clear()
         self._barge_in_triggered = False
+        self._barge_in_chunks = []
+        self._empty_reads = 0
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
 
@@ -46,21 +60,49 @@ class AsyncVoiceSessionManager:
         """Background thread loop checking VAD while TTS is speaking."""
         import queue
         logger.debug("[ASYNC SESSION] Barge-in monitor started.")
-        while not self._stop_event.is_set() and self.tts.is_speaking():
-            try:
-                # Check VAD status on incoming audio chunk
-                if hasattr(self.session_manager, "vad") and self.session_manager.vad:
-                    try:
-                        audio_chunk = self.session_manager.audio.queue.get(timeout=0.05)
-                        is_speech = self.session_manager.vad.is_speech(audio_chunk)
-                        if is_speech:
-                            logger.info("[ASYNC SESSION] User speech detected mid-TTS output. Triggering barge-in stop.")
-                            self.tts.stop()
-                            self._barge_in_triggered = True
-                            break
-                    except queue.Empty:
-                        pass
-            except Exception as e:
-                logger.debug("[ASYNC SESSION] Monitor exception: %s", e)
+        while not self._stop_event.is_set():
+            # 1) ---------- capture phase (user already interrupted) ----------
+            if self._barge_in_triggered:
+                try:
+                    audio_chunk = self.session_manager.audio.queue.get(timeout=0.05)
+                except queue.Empty:
+                    self._empty_reads += 1
+                    if self._empty_reads >= 2:
+                        break
+                    continue
+                self._barge_in_chunks.append(audio_chunk)
+                self._empty_reads = 0
+                if len(self._barge_in_chunks) >= self._barge_capture_max:
+                    break
+                continue
+
+            # 2) ---------- detection phase (TTS still playing) ----------
+            if not self.tts.is_speaking():
                 break
+            try:
+                audio_chunk = self.session_manager.audio.queue.get(timeout=0.05)
+            except queue.Empty:
+                self._empty_reads += 1
+                # No mic audio while TTS plays is abnormal (the stream keeps
+                # producing chunks) and would otherwise spin forever.
+                if self._empty_reads >= 50:
+                    break
+                continue
+            self._empty_reads = 0
+            try:
+                is_speech = self.session_manager.vad.is_speech(audio_chunk)
+            except Exception as e:
+                logger.debug("[ASYNC SESSION] VAD error: %s", e)
+                continue
+            if is_speech:
+                logger.info(
+                    "[ASYNC SESSION] User speech detected mid-TTS output. "
+                    "Triggering barge-in stop."
+                )
+                # Keep this first speech chunk: it is the (lost-in-the-old
+                # design) head of the user's interrupt utterance.
+                self._barge_in_chunks.append(audio_chunk)
+                self._barge_in_triggered = True
+                self._empty_reads = 0
+                self.tts.stop()
             time.sleep(0.01)

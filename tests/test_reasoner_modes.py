@@ -53,7 +53,8 @@ def test_chat_mode_uses_chat_prompt_and_returns_natural_response():
 
     assert out == {"type": "response", "text": "Java is a statically typed, object-oriented language."}
     assert captured["payload"]["temperature"] == 0.4
-    assert captured["payload"]["max_tokens"] == 512
+    assert captured["payload"]["max_tokens"] == 256
+    assert captured["payload"]["stream"] is True
     assert captured["payload"]["messages"][0]["content"] == CHAT_PROMPT
 
 
@@ -70,6 +71,7 @@ def test_action_mode_uses_structured_prompt_and_validator():
     assert out["target"] == "chrome"
     assert captured["payload"]["temperature"] == 0.0
     assert captured["payload"]["max_tokens"] == 128
+    assert captured["payload"]["stream"] is True
     assert captured["payload"]["messages"][0]["content"] == SYSTEM_PROMPT
 
 

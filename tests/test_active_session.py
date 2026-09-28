@@ -138,7 +138,7 @@ class StubSessionManager:
         self.stop_session()
         return False
 
-    def listen_once(self):
+    def listen_once(self, initial_chunks=None):
         if not self.transcripts:
             return ""
         return self.transcripts.pop(0)
@@ -554,3 +554,110 @@ def test_session_control_phrases_classified():
     assert classify("end session") == RequestClass.SESSION_CONTROL
     assert classify("next video") == RequestClass.CONTEXT_REFERENCE
     assert classify("play next video") == RequestClass.CONTEXT_REFERENCE
+
+
+# ==============================================================================
+# Context-memory bug fixes: deterministic context references & memory questions
+# ==============================================================================
+
+def test_what_was_playing_now_returns_current_media():
+    cm = _cm()
+    cm.handle_transcript("play python introduction on youtube")
+    resp, _ = cm.handle_transcript("what was playing now")
+    assert "python introduction" in resp.lower()
+    assert "you're watching" in resp.lower()
+    assert "don't currently have" not in resp.lower()
+
+
+def test_what_is_playing_returns_current_media():
+    cm = _cm()
+    cm.handle_transcript("play jazz classics on youtube")
+    resp, _ = cm.handle_transcript("what is playing")
+    assert "jazz classics" in resp.lower()
+
+
+def test_what_are_we_watchestill_returns_current_media():
+    cm = _cm()
+    cm.handle_transcript("play neetha song on youtube")
+    resp, _ = cm.handle_transcript("what are we watching")
+    assert "neetha song" in resp.lower()
+
+
+def test_what_was_playing_no_media_honest_response():
+    cm = _cm()
+    resp, _ = cm.handle_transcript("what was playing")
+    assert "don't have a video" in resp.lower()
+
+
+def test_now_play_third_video_positional_resolution():
+    cm = _cm()
+    cm.handle_transcript("search for python tutorials on google")
+    resp, _ = cm.handle_transcript("now play third video")
+    assert "example.com/3" in resp.lower() or "example.com/3" in cm.context.last_search_query.lower()
+
+
+def test_okay_play_second_video_positional_resolution():
+    cm = _cm()
+    cm.handle_transcript("search for python tutorials on google")
+    resp, _ = cm.handle_transcript("okay play the second video")
+    assert "example.com/2" in resp.lower() or "example.com/2" in cm.context.last_search_query.lower()
+
+
+def test_please_play_first_video_positional_resolution():
+    cm = _cm()
+    cm.handle_transcript("search for python tutorials on google")
+    resp, _ = cm.handle_transcript("please play first video")
+    assert "example.com/1" in resp.lower() or "example.com/1" in cm.context.last_search_query.lower()
+
+
+def test_play_third_video_with_only_two_results():
+    cm = _cm()
+    cm.handle_transcript("search for python tutorials on google")
+    cm.context.last_search_results = cm.context.last_search_results[:2]
+    resp, _ = cm.handle_transcript("play third video")
+    assert "only found 2" in resp.lower()
+
+
+def test_play_third_video_without_search_context():
+    cm = _cm()
+    resp, _ = cm.handle_transcript("play third video")
+    assert "don't have a recent video search" in resp.lower()
+
+
+def test_failed_play_video_does_not_change_current_media():
+    cm = _cm()
+    cm.handle_transcript("play neetha song on youtube")
+    before = dict(cm.context.current_media)
+    assert before.get("query") == "neetha song"
+
+    # Simulate a failed PLAY_VIDEO by calling _record_tool_result directly
+    from friday.intent.models import Intent, Action
+    failed_intent = Intent(
+        action=Action.PLAY_VIDEO, target="nonexistent song xyz",
+        arguments={}, intent_confidence=0.9, target_confidence=1.0,
+        confidence=0.9, requires_confirmation=False,
+        raw_text="play nonexistent song xyz on youtube",
+    )
+    cm._record_tool_result(failed_intent, {"success": False}, [])
+    assert cm.context.current_media == before, "Failed PLAY_VIDEO must not overwrite current_media"
+
+
+def test_now_play_third_video_classifier():
+    assert classify("now play third video") == RequestClass.CONTEXT_REFERENCE
+    assert classify("okay play the second video") == RequestClass.CONTEXT_REFERENCE
+    assert classify("then play first video") == RequestClass.CONTEXT_REFERENCE
+    assert classify("can you play the third video") == RequestClass.CONTEXT_REFERENCE
+
+
+def test_what_did_you_play_returns_current_media():
+    cm = _cm()
+    cm.handle_transcript("play django tutorial on youtube")
+    resp, _ = cm.handle_transcript("what did you play")
+    assert "django tutorial" in resp.lower()
+
+
+def test_which_video_is_playing():
+    cm = _cm()
+    cm.handle_transcript("play flask web dev on youtube")
+    resp, _ = cm.handle_transcript("which video is playing")
+    assert "flask web dev" in resp.lower()

@@ -74,6 +74,37 @@ reasoning:
     context_size: 2048
     startup_timeout: 60
 
+rag:
+  enabled: true
+  collection: "friday_knowledge"
+  persist_dir: ""                 # "" = project .data/rag
+  retrieval_k: 15                 # candidates before rerank
+  final_k: 5                      # context chunks after rerank
+  similarity_threshold: 0.30      # vector relevance floor (all-MiniLM calibrated)
+  relevance_min_score: 0.30       # combined rerank floor
+  rerank: true
+  hybrid: true
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  context_compression: true
+  max_context_tokens: 3000
+  auto_ingest: true
+  include_md: true
+  source_dirs: ["docs", "."]
+  no_context_message: "I don't have enough relevant information in my knowledge base to answer that confidently."
+
+research:
+  enabled: false                 # opt-in: Phase 1/2 web research subsystem
+  provider: "duckduckgo"         # WEB_SEARCH_PROVIDER overrides
+  api_key: ""                    # WEB_SEARCH_API_KEY (duckduckgo needs none)
+  max_results: 5                 # WEB_SEARCH_MAX_RESULTS
+  max_queries: 3                 # generated search queries per request
+  timeout: 10                    # per-query timeout in seconds (WEB_SEARCH_TIMEOUT)
+  prefer_official: false         # optional official-domain preference
+
+natural_conversation:
+  enabled: true                 # FRIDAY_NATURAL_CONVERSATION_ENABLED overrides
+
 logging:
   level: "INFO"
   file: "logs/friday.log"

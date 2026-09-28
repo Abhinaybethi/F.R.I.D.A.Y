@@ -62,7 +62,7 @@ def test_multi_step_commands():
         cm.context.last_tool_result = None
         cm.context.last_search_results = []
         resp, keep = cm.handle_transcript("open the first result")
-        assert "I don't have a result list" in resp
+        assert "I don't have a recent video search" in resp
 
         print("ALL MULTI-STEP COMMAND TESTS PASSED")
 

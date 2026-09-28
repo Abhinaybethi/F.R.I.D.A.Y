@@ -119,7 +119,7 @@ def test_gate_12_ordinal_search_result_bounds():
     results = [{"title": "P1", "url": "https://example.com/1"}]
     ctx = ShortTermContext(last_search_results=results)
     res, err = resolve_context("open the second result", ctx)
-    assert err and "out of range" in err
+    assert err and "only found 1" in err
 
 
 # Gate 13: Inline correction target replacement

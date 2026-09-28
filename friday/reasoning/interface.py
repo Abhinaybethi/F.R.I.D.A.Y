@@ -7,7 +7,8 @@ from friday.planning.context_resolver import ShortTermContext
 
 class Reasoner(ABC):
     @abstractmethod
-    def request(self, transcript: str, context: ShortTermContext, mode: str = "action") -> dict:
+    def request(self, transcript: str, context: ShortTermContext, mode: str = "action",
+                retrieval_context: str = "") -> dict:
         """
         Processes a transcript and short-term context.
 
@@ -16,6 +17,7 @@ class Reasoner(ABC):
             context:    ShortTermContext from the running conversation.
             mode:       "action" -> structured intent/plan JSON
                         "chat"   -> natural language response (QUESTION/CHAT)
+            retrieval_context: Optional RAG context block (chat mode only).
         Returns a validated, structured JSON dictionary.
         """
         pass

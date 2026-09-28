@@ -33,8 +33,11 @@ _FOLDERS = r"(downloads?|documents?|desktop|pictures?|music|videos?)"
 # handler(match) → (Action | None, target_raw, intent_confidence)
 # Action=None means "open something — resolve by target type"
 _PATTERNS: list[tuple[re.Pattern, callable]] = [
-    # System Intents
-    (re.compile(r"^(?:stop|shut down|exit|quit|goodbye)(?:\s+(?:friday\s+)?speaking)?$"),
+    # System Intents — every exit variant (bye / good bye / see you / that's
+    # all / shutdown / stop friday) resolves here, never to the reasoner (P1).
+    (re.compile(r"^(?:stop|shut\s*down|shutdown|exit|quit|goodbye|good\s*bye|"
+                r"bye|stop\s+friday|see\s+you|that'?s?\s*all|thats\s*all|go\s*to\s*sleep)"
+                r"(?:\s+(?:friday\s+)?speaking)?$"),
      lambda m: (Action.SYSTEM_STOP, "", 1.0)),
 
     (re.compile(r"^(?:cancel|never mind|nevermind|abort)$"),
@@ -156,6 +159,31 @@ def _resolve_open(target_raw: str) -> tuple[Action, str, float]:
     return Action.OPEN_APP, target_raw, 0.0
 
 
+# Trailing application/browser mention inside a search request, e.g.
+# "search for python tutorials on chrome" -> ("python tutorials", "chrome").
+# Search intent stays SEARCH_WEB; the application becomes intent.arguments.
+_SEARCH_APP_SUFFIX = re.compile(
+    r"\s+(?:on|in|using|via)\s+(?:the\s+)?"
+    r"(chrome|edge|firefox|brave|google|youtube|bing)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_search_target(raw: str) -> tuple[str, str]:
+    """Split a SEARCH_WEB target into ``(query, optional_application)``.
+
+    "kalyani song on chrome"  -> ("kalyani song", "chrome")
+    "python tutorials"        -> ("python tutorials", "")
+    """
+    if not raw:
+        return "", ""
+    m = _SEARCH_APP_SUFFIX.search(raw)
+    if not m:
+        return raw.strip(), ""
+    query = raw[: m.start()].strip()
+    return query, m.group(1).lower()
+
+
 def route(raw_text: str) -> Intent:
     """
     Classify ``raw_text`` (raw STT transcript) into a structured Intent.
@@ -205,8 +233,15 @@ def route(raw_text: str) -> Intent:
                 key = parts[0].replace("my ", "").replace("the ", "").strip()
                 arguments = {"key_name": key, "category": "preference"}
 
+        elif action == Action.SEARCH_WEB:
+            # Split "kalyani song on chrome" into query + optional application.
+            query, app = _parse_search_target(target_raw)
+            target_name = query
+            target_conf = 1.0 if query else 0.0
+            arguments = {"application": app} if app else {}
+
         elif action in (
-            Action.SEARCH_WEB, Action.FIND_FILE, Action.GET_TIME,
+            Action.FIND_FILE, Action.GET_TIME,
             Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
             Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
             Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA,
