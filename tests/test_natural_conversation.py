@@ -30,7 +30,9 @@ from friday.core.natural_conversation import (
     GREETING,
     NEGATIVE_FEEDBACK,
     POSITIVE_FEEDBACK,
+    READY,
     THANKS,
+    USER_STATEMENT,
     WELLBEING,
     NaturalConversationRouter,
 )
@@ -448,6 +450,156 @@ def test_layer_is_enabled_by_default():
     manager = make_manager()
     assert manager.natural_conversation_enabled is True
     assert manager.natural_conversation_router is not None
+
+
+# ---------------------------------------------------------------------------
+# 9. readiness acknowledgements (2026-09-29 voice run)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text,expected", [
+    ("and I'm ready.", READY),
+    ("I'm ready", READY),
+    ("ready", READY),
+    ("okay I'm ready", READY),
+    ("yes I'm ready", READY),
+    ("ok, I'm ready to go", READY),
+    ("ready to start", READY),
+    ("yeah ready", READY),
+])
+def test_readiness_handled_locally(text, expected):
+    result = make_router().route(text)
+    assert result is not None and result.handled
+    assert result.intent == expected
+    assert result.response
+
+
+@pytest.mark.parametrize("text", [
+    "I'm ready to search for Python",
+    "ready to open chrome",
+    "ready, what time is it?",
+    "ready to explain React hooks",
+    "I'm ready for the interview tomorrow",
+])
+def test_readiness_never_swallows_a_substantive_request(text):
+    assert make_router().route(text) is None
+
+
+# ---------------------------------------------------------------------------
+# 10. closing / thanks-style STT output
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text,expected", [
+    ("thanks for watching!", THANKS),
+    ("thanks for watching", THANKS),
+    ("thank you for watching", THANKS),
+    ("thanks friday", THANKS),
+    ("thanks for listening", THANKS),
+    ("thanks for your help", THANKS),
+    ("bye friday", GOODBYE),
+    ("thanks, bye", GOODBYE),
+])
+def test_closing_output_handled_locally(text, expected):
+    result = make_router().route(text)
+    assert result is not None and result.handled
+    assert result.intent == expected
+    assert result.response
+
+
+@pytest.mark.parametrize("text", [
+    "thanks, search for Python",
+    "thanks for watching, open chrome",
+    "thanks, what is Node.js?",
+])
+def test_closing_output_never_swallows_a_request(text):
+    assert make_router().route(text) is None
+
+
+# ---------------------------------------------------------------------------
+# 11. ordinary statements get a neutral acknowledgement (no persuasion)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text", [
+    "I believe in Russia.",
+    "I support Russia.",
+    "yeah, so, but i believe in russia.",
+    "I think that is a good point",
+    "I don't agree with that",
+    "I prefer tea",
+])
+def test_user_statement_acknowledged_neutrally(text):
+    result = make_router().route(text)
+    assert result is not None and result.handled
+    assert result.intent == USER_STATEMENT
+    low = result.response.lower()
+    for banned in (
+        "you should", "i agree", "i disagree", "correct", "incorrect",
+        "right to", "wrong to", "will win", "will lose", "must support",
+        "must oppose", "in my opinion",
+    ):
+        assert banned not in low, f"persuasive language in {result.response!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "I believe in Russia, what time is it?",
+    "I support Russia, open chrome",
+    "I think you should search for Python",
+])
+def test_user_statement_never_swallows_a_request(text):
+    assert make_router().route(text) is None
+
+
+# ---------------------------------------------------------------------------
+# 12. node.js family is never conversational
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text", [
+    "node.js",
+    "nodejs",
+    "Node JS",
+    "what is node.js",
+    "tell me about node.js",
+    "no jes",
+    "no jess",
+])
+def test_node_terms_are_not_conversational(text):
+    assert make_router().route(text) is None
+
+
+# ---------------------------------------------------------------------------
+# 13. manager integration for the new local intents
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text", [
+    "I'm ready.",
+    "and I'm ready.",
+    "ready",
+    "thanks",
+    "thank you",
+    "thanks Friday",
+    "thanks for watching!",
+    "what time is it?",
+])
+def test_manager_bypasses_reasoner_for_new_local_intents(text):
+    reasoner = RecordingReasoner()
+    manager = make_manager(reasoner)
+    response, keep_going = manager.handle_transcript(text)
+    assert reasoner.seen == [], f"{text!r} must not reach the reasoner"
+    assert response
+    assert keep_going is True
+
+
+def test_manager_acknowledges_a_political_statement_locally():
+    reasoner = RecordingReasoner()
+    manager = make_manager(reasoner)
+    response, _ = manager.handle_transcript("yeah, so, but i believe in russia.")
+    assert reasoner.seen == []
+    assert response
+    low = response.lower()
+    assert "you should" not in low and "i agree" not in low
+
+
+def test_readiness_metrics_recorded():
+    router = make_router()
+    manager = make_manager(natural_conversation_router=router)
+    manager.handle_transcript("and I'm ready.")
+    snapshot = router.metrics.snapshot()
+    assert snapshot["natural_chat_count"] == 1
+    assert snapshot["natural_chat_llm_bypass_count"] == 1
 
 
 def test_local_latency_is_sub_millisecond():

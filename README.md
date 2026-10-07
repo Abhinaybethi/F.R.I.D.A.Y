@@ -1,8 +1,8 @@
 # F.R.I.D.A.Y. — Personal Local AI Voice Assistant
 
-**F.R.I.D.A.Y.** is a privacy-first, local AI voice assistant for Windows that combines speech recognition, voice activity detection, local LLM reasoning, tool execution, contextual memory, and text-to-speech into a single desktop assistant.
+**F.R.I.D.A.Y.** is a privacy-first, local AI voice assistant for Windows that combines speech recognition, voice activity detection, deterministic intent routing, local LLM reasoning, a deterministic natural-conversation layer, a local hybrid knowledge base, opt-in web research, tool execution, contextual memory, and text-to-speech into a single desktop assistant.
 
-The system is designed around a **local-first architecture**: speech processing and LLM inference can run directly on the user's machine without sending conversations to a cloud AI provider.
+The system is designed around a **local-first architecture**: speech processing and LLM inference run directly on the user's machine without sending conversations to a cloud AI provider. Everything except the explicitly opt-in research subsystem works fully offline.
 
 ---
 
@@ -27,46 +27,58 @@ The system is designed around a **local-first architecture**: speech processing 
                                │
                                ▼
               ┌────────────────────────────────┐
-              │     Command / Intent Router    │
-              │ Deterministic + Fuzzy Matching │
-              └───────────────┬────────────────┘
+              │     Command / Intent Router     │
+              │ Deterministic + Fuzzy Matching  │
+              └───────────────┬─────────────────┘
                               │
-                 ┌────────────┴─────────────┐
-                 │                          │
-                 ▼                          ▼
-        ┌─────────────────┐       ┌──────────────────┐
-        │ Known Commands  │       │ Complex Requests │
-        │ Fast Tool Path  │       │ Local LLM Path   │
-        └────────┬────────┘       └─────────┬────────┘
-                 │                          │
-                 │                 ┌────────▼─────────┐
-                 │                 │    Bonsai LLM    │
-                 │                 │      8B GGUF     │
-                 │                 └────────┬─────────┘
-                 │                          │
-                 └────────────┬─────────────┘
                               ▼
-                    ┌──────────────────────┐
-                    │  Safety / Permission │
-                    │       Gate           │
-                    └──────────┬───────────┘
-                               │
+              ┌────────────────────────────────┐
+              │  Deterministic Classification  │
+              │     RequestClass (no LLM)      │
+              └───────────────┬─────────────────┘
+                              │
+                              ▼
+              ┌────────────────────────────────┐
+              │   Natural Conversation Layer   │
+              │  Greeting / wellbeing / thanks │
+              │ feedback / farewell  (no LLM)  │
+              └───────────────┬─────────────────┘
+                              │  only when the whole
+                              │  utterance is chatter
+                              ▼
+         ┌─────────────────┐   ┌──────────────────────┐
+         │ Known Commands  │   │ Context Resolution   │
+         │ Fast Tool Path  │   │   + RAG / Research   │
+         └────────┬────────┘   └─────────┬────────────┘
+                  │                       │
+                  │              ┌────────▼─────────┐
+                  │              │    Bonsai LLM    │
+                  │              │      8B GGUF     │
+                  │              └────────┬─────────┘
+                  │                       │
+                  └────────────┬──────────┘
                                ▼
-                    ┌──────────────────────┐
-                    │     Tool Executor    │
-                    │ Windows / Web / Files │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │   Response Formatter │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │      Kokoro TTS      │
-                    │   Local Speech Output│
-                    └──────────────────────┘
+                     ┌──────────────────────┐
+                     │  Safety / Permission │
+                     │       Gate           │
+                     └──────────┬───────────┘
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │     Tool Executor    │
+                     │ Windows / Web / Files │
+                     └──────────┬───────────┘
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │   Response Formatter │
+                     └──────────┬───────────┘
+                                │
+                                ▼
+                     ┌──────────────────────┐
+                     │      Kokoro TTS      │
+                     │   Local Speech Output│
+                     └──────────────────────┘
 ```
 
 ---
@@ -149,6 +161,105 @@ User → STT → LLM → reasoning → tool selection → execution
 ```
 
 This reduces unnecessary LLM inference and improves response latency.
+
+---
+
+### 💬 Natural Conversation Layer (no LLM)
+
+Pure social chatter is answered locally by `friday/core/natural_conversation.py`, before context
+resolution and before the reasoner, so `"how are you?"` never costs an inference call.
+
+```text
+"how are you?"
+      │
+      ▼
+NaturalConversationRouter
+      │
+      ▼
+"I'm doing great. How about you?"      (~0.9 ms, 0 LLM calls)
+```
+
+Recognised intents:
+
+| Intent | Example |
+| --- | --- |
+| Greeting | `hi`, `hey Friday`, `good morning` |
+| Wellbeing | `how are you?`, `how's it going?`, `you okay?` |
+| Thanks | `thanks`, `thank you so much`, `that helped` |
+| Acknowledgement | `okay`, `sure`, `got it`, `sounds good` |
+| Positive feedback | `nice`, `great`, `that's great` |
+| Negative feedback | `ugh`, `oh no`, `that's bad` |
+| Farewell | `bye`, `see you later`, `catch you later` |
+
+The layer is deliberately conservative and **only handles an utterance when every part of it is
+conversational**:
+
+```text
+"hi, how are you?"                       → handled locally
+"thanks, bye"                            → handled locally
+"okay, what is Node.js?"                 → passed to the pipeline
+"thanks, search for Python 3.14"         → passed to the pipeline
+"can you tell me about it? … node man"   → passed to the pipeline
+```
+
+Questions, commands, tool requests, context references, follow-ups, and anything with an entity,
+version, date, or quantity are never swallowed. The raw utterance is never rewritten — normalisation
+happens on a copy used only for matching.
+
+Configuration:
+
+```yaml
+natural_conversation:
+  enabled: true          # FRIDAY_NATURAL_CONVERSATION_ENABLED overrides
+```
+
+Logging and counters:
+
+```text
+[NATURAL_CHAT] intent=WELLBEING handled=true -> local response (no LLM) raw='how are you?' ...
+```
+
+`natural_chat_count`, `natural_chat_llm_bypass_count`, `natural_chat_latency_ms_{total,avg,max}`,
+`natural_chat_rejected_count`
+
+---
+
+### 📚 Local Knowledge Base (Hybrid RAG)
+
+Document Q&A runs against a local knowledge base in `friday/rag/` with no external service:
+
+```text
+docs/*.md, project files
+        ↓
+   Chunker
+        ↓
+ Embeddings (all-MiniLM-L6-v2, ONNX, 384-dim, local)
+ + BM25 lexical index
+        ↓
+ Hybrid retrieval → rerank → relevance floor → context compression
+        ↓
+      Prompt → Bonsai
+```
+
+Query analysis, relevance filtering, and the RAG evaluation set live in
+`friday/rag/query_analyzer.py`, `friday/rag/relevance_filter.py`, and `friday/rag/eval_set.py`.
+
+---
+
+### 🌐 Opt-in Web Research
+
+`friday/research/` provides a plan/answer pipeline for questions that genuinely need the web
+(DuckDuckGo search + extraction). It is **disabled by default** and off-line behaviour is unchanged
+when it is off.
+
+```yaml
+research:
+  enabled: false
+  provider: "duckduckgo"
+  max_results: 5
+  max_queries: 3
+  timeout: 10
+```
 
 ---
 
@@ -276,7 +387,49 @@ to potentially resolve to the intended application when the fuzzy matching layer
 
 ---
 
-## 4. LLM Reasoning
+## 4. Natural Conversation Layer
+
+After deterministic classification, pure chatter is answered locally.
+
+```text
+Transcript
+    ↓
+classify()  →  RequestClass        (free, no LLM)
+    ↓
+NaturalConversationRouter.route()   (free, no LLM)
+    │
+    ├── pure chatter  → local response, done
+    │
+    └── anything else → context resolution → RAG / research → reasoner
+```
+
+`RequestClass.EXIT`, `COMMAND`, `TOOL_REQUEST`, `CONTEXT_REFERENCE`, `FOLLOW_UP`, and
+`SCREEN_QUESTION` never enter this layer, and session-exit / confirmation handling still runs first.
+
+---
+
+## 5. Context Resolution
+
+`friday/planning/context_resolver.py` and the context handling in `friday/core/conversation.py`
+resolve pronouns, role ellipsis, and demonstratives deterministically before any model call.
+
+```text
+User: Who is the president of Russia?
+
+User: Tell me more about him
+      → "tell me more about the president of russia"
+
+User: Who is king charles iii
+      → passes through unchanged (not a role question)
+
+User: can you tell me about it? ... freddened like node man. what is node man?
+      what's the purpose of using it?
+      → trailing "it" binds to the phrase named twice in the same turn
+```
+
+---
+
+## 6. LLM Reasoning
 
 Requests that require natural-language reasoning can be routed to the local LLM.
 
@@ -478,13 +631,15 @@ Transcript Buffer
     ↓
 Question / Command Detector
     ↓
+Natural Conversation Layer      ← chatter answered here, no LLM
+    ↓
 Context Resolver
     ↓
 Fast Router
     │
     ├── Known command → Tool
     │
-    └── Complex request → Bonsai
+    └── Complex request → RAG / research → Bonsai
                             ↓
                        llama.cpp
     ↓
@@ -508,12 +663,15 @@ Speaker
 | Inference     | llama.cpp        |
 | STT           | faster-whisper   |
 | VAD           | Silero VAD       |
-| TTS           | Kokoro ONNX      |
+| TTS           | Kokoro ONNX / Piper |
+| Embeddings    | all-MiniLM-L6-v2 (ONNX, local) |
+| Retrieval     | hybrid vector + BM25 (self-contained) |
 | Memory        | SQLite           |
 | Communication | WebSocket / HTTP |
 | ML Runtime    | ONNX Runtime     |
+| Logging       | loguru           |
 | OS            | Windows          |
-| Configuration | YAML             |
+| Configuration | YAML + env       |
 
 ---
 
@@ -523,15 +681,25 @@ Speaker
 F.R.I.D.A.Y/
 │
 ├── friday/
-│   ├── audio/
-│   ├── reasoning/
-│   │   ├── llamacpp_reasoner.py
-│   │   └── llamacpp_server.py
-│   ├── routing/
-│   ├── tools/
-│   ├── memory/
-│   ├── context/
-│   └── ...
+│   ├── audio/               # audio capture helpers
+│   ├── core/                # assistant, conversation, session, state,
+│   │                        # wake word, natural_conversation.py
+│   ├── intent/              # classifier, normalizer, router, fuzzy router
+│   ├── planning/            # planner, plan models/validator/executor,
+│   │                        # context_resolver.py
+│   ├── rag/                 # chunker, embedder, lexical/BM25, retriever,
+│   │                        # reranker, relevance filter, compressor
+│   ├── reasoning/           # llamacpp_reasoner.py, llamacpp_server.py
+│   ├── research/            # opt-in web research agent
+│   ├── memory/              # local persistent memory
+│   ├── tools/               # apps, browser, files, memory, registry
+│   ├── safety/              # permissions, confirmation, validator
+│   ├── response/            # response engine
+│   ├── system_control/      # app/file/system control
+│   ├── ui/                  # tray, status
+│   ├── utils/               # logger, audit log, config validation, diagnostics
+│   ├── verification/        # verifiers, formatters
+│   └── voice/               # VAD, STT, TTS, session manager, state machine
 │
 ├── desktop/
 │   └── stealth_overlay.py
@@ -540,10 +708,57 @@ F.R.I.D.A.Y/
 │
 ├── scripts/
 │
+├── tests/                   # 133 test modules
+│
 ├── config.yaml
 ├── main.py
 ├── requirements.txt
 └── README.md
+```
+
+---
+
+# ⚙️ Configuration
+
+`config.yaml` holds the runtime configuration; environment variables take precedence where noted.
+
+```yaml
+wake_word: "friday"
+
+security:            # fail-closed execution
+  dry_run: true
+  allow_real_execution: false
+
+voice:               # VAD / STT / TTS device and model settings
+listening:           # wake-word and auto-listen behaviour
+brain:               # routing thresholds
+reasoning:           # provider (llamacpp / ollama), model, endpoint, timeout
+
+rag:                 # local knowledge base
+  enabled: true
+  retrieval_k: 15
+  final_k: 5
+  rerank: true
+  hybrid: true
+
+research:            # opt-in web research
+  enabled: false
+
+natural_conversation:
+  enabled: true      # FRIDAY_NATURAL_CONVERSATION_ENABLED overrides
+
+logging:
+  level: "INFO"
+  file: "logs/friday.log"
+```
+
+Common environment overrides (see `.env.example`):
+
+```text
+FRIDAY_REASONING_PROVIDER=llamacpp
+LLAMACPP_BASE_URL=http://127.0.0.1:8080
+FRIDAY_NATURAL_CONVERSATION_ENABLED=true
+WEB_RESEARCH_ENABLED=false
 ```
 
 ---
@@ -672,6 +887,24 @@ Stop
 Goodbye
 ```
 
+### Conversation (answered locally, no LLM)
+
+```text
+Hi
+How are you?
+Thanks
+Okay
+See you later
+```
+
+Compound requests that carry real work still go to the normal pipeline:
+
+```text
+Hi, how are you?                  → local
+Okay, what is Node.js?            → LLM / knowledge base
+Thanks, search for Python 3.14    → research + LLM
+```
+
 ---
 
 # 🔒 Security Model
@@ -710,18 +943,66 @@ The LLM does **not** receive unrestricted operating-system access.
 
 # 🧪 Testing
 
-The project includes testing across multiple layers:
+The project includes 133 test modules covering multiple layers:
 
 ```text
 Unit Tests
 Integration Tests
 Routing Tests
 Reasoning Tests
+Natural Conversation Tests
+Context / Anaphora Tests
+RAG Tests
 Audio Pipeline Tests
 Tool Execution Tests
+Security Gate Tests
 ```
 
+Run the full suite:
+
+```powershell
+python -m pytest tests -q
+```
+
+Or the helper script:
+
+```powershell
+.\run_tests.ps1
+```
+
+Useful subsets:
+
+```powershell
+python -m pytest tests/test_natural_conversation.py -q
+python -m pytest tests/test_context_integrity.py -q
+python -m pytest tests/test_voice_architecture.py -q
+```
+
+Markers are declared in `pytest.ini` (`unit`, `integration`, `hardware`, `ollama`, `security`,
+`release`). No test needs a cloud API; tests that require the microphone, live network, or a running
+llama.cpp server are separated so the rest of the suite stays runnable offline.
+
+Current state: `1220 passed / 38 failed`, where every remaining failure is a pre-existing
+config-default/secret gate, live-network workflow, external-timeout, or environment-fixture issue —
+not a conversation, routing, context, or voice regression.
+
 Before describing the project as production-ready, performance and reliability numbers should be generated from reproducible test runs rather than manually claimed.
+
+---
+
+# ⚡ Measured Performance
+
+Deterministic paths (no model involved), measured on the development machine:
+
+| Path | Median latency | LLM calls |
+| --- | --- | --- |
+| `hi` | 0.70 ms | 0 |
+| `how are you?` | 0.92 ms | 0 |
+| `thanks` | 0.46 ms | 0 |
+| `okay` | 0.42 ms | 0 |
+| `see you later` | 1.15 ms | 0 |
+| `open chrome` (command path) | sub-ms | 0 |
+| Model-backed question | seconds (llama.cpp round trip) | 1 |
 
 ---
 
@@ -760,7 +1041,11 @@ Speech recognition, reasoning, routing, memory, tools, and TTS should remain rep
 * [x] llama.cpp integration
 * [x] Automatic llama.cpp server startup
 * [x] Fast command routing
-* [x] Context resolution
+* [x] Deterministic natural conversation layer
+* [x] Context & anaphora resolution
+* [x] Local hybrid RAG knowledge base
+* [x] Opt-in web research agent
+* [x] Plan / goal execution with recovery
 * [x] Local memory
 * [x] Tool registry
 * [x] Permission gate

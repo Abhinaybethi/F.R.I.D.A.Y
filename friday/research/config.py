@@ -3,8 +3,10 @@ Research configuration.
 
 Provider settings come from environment variables, falling back to the
 ``research:`` block in ``config.yaml``, then to safe defaults. No credentials
-are ever hard-coded or logged. When research is disabled the subsystem is a
-no-op and F.R.I.D.A.Y. continues exactly as before.
+are ever hard-coded or logged. Live web research is **enabled by default**
+unless an explicit kill switch (``WEB_RESEARCH_ENABLED=0`` or
+``research.enabled: false``) turns it off. When research is disabled the
+subsystem is a no-op and F.R.I.D.A.Y. continues exactly as before.
 """
 import os
 from dataclasses import dataclass, field
@@ -40,7 +42,7 @@ def _env_float(name: str, default: float, lo: float, hi: float) -> float:
 class ResearchConfig:
     """Resolved research subsystem settings (env > config.yaml > defaults)."""
 
-    enabled: bool = False
+    enabled: bool = True
     provider: str = _DEFAULT_PROVIDER
     api_key: str = ""
     max_results: int = 5
@@ -71,7 +73,9 @@ class ResearchConfig:
         elif isinstance(enabled_raw, str):
             enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
         else:
-            enabled = bool(m.get("enabled", False))
+            # No environment override: default ON. An explicit `research.enabled:
+            # false` in config.yaml (or WEB_RESEARCH_ENABLED=0) is the kill switch.
+            enabled = bool(m.get("enabled", True))
 
         provider = str(provider_raw or _DEFAULT_PROVIDER).strip().lower()
         if not provider:

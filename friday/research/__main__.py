@@ -6,12 +6,15 @@ Usage::
     python -m friday.research "latest Python version"
     python -m friday.research "what is a binary tree"          # decision only
     python -m friday.research "search the web for React 20" --max-results 3
+    python -m friday.research "latest news" --debug            # debug diagnostics
 
 Prints the research decision, generated queries and normalized results. Never
-prints API keys or credentials.
+prints API keys or credentials. ``--debug`` adds the decision, provider,
+query/result/failed/evidence counts and total latency.
 """
 import argparse
 import sys
+import time
 
 from friday.research.agent import ResearchAgent
 from friday.research.config import ResearchConfig
@@ -45,7 +48,19 @@ def main(argv=None) -> int:
                         help="show the routing decision without searching")
     parser.add_argument("--json", action="store_true",
                         help="emit a JSON payload with decision + results")
+    parser.add_argument("--debug", action="store_true",
+                        help="print decision, provider, per-query counts and "
+                             "total latency (never prints credentials)")
     args = parser.parse_args(argv)
+
+    # Results contain international / Unicode characters (titles, em dashes);
+    # the Windows console is often cp1252 and would crash on print(). Emit
+    # UTF-8 with an explicit replacement policy so result output never raises.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):  # non-reconfigureable stream
+        pass
 
     query = (args.query or "").strip()
     if not query:
@@ -60,7 +75,27 @@ def main(argv=None) -> int:
     if args.decide_only:
         return _decide_only(agent, query)
 
+    if args.debug:
+        decision = agent.decide(query)
+        started = time.monotonic()
+
     response = agent.research(query)
+
+    if args.debug:
+        elapsed_total = (time.monotonic() - started) * 1000.0
+        planned = decision.search_queries
+        err_type = response.error.error_type if response.error else "none"
+        print("[DEBUG] decision needs_web=%s type=%s reason=%s" % (
+            response.needs_web, response.query_type, decision.reason,
+        ))
+        print("[DEBUG] resolved_query=%r (CLI has no conversation context)" % query)
+        print("[DEBUG] provider=%s max_results=%d timeout=%.1f max_queries=%d" % (
+            config.provider, config.max_results, config.timeout, config.max_queries,
+        ))
+        print("[DEBUG] search_queries=%d results=%d error=%s" % (
+            len(planned), len(response.results), err_type,
+        ))
+        print("[DEBUG] total_latency_ms=%.1f" % elapsed_total)
 
     if args.json:
         import json

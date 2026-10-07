@@ -182,14 +182,32 @@ def test_manager_research_enabled_but_local_question_stays_local():
     assert mgr.context.last_research.needs_web is False
 
 
-def test_manager_research_failure_falls_through_gracefully():
+def test_manager_research_failure_blocks_static_fallback_for_news():
+    """Bounded fallback: a time-sensitive query with research enabled but no
+    live evidence must NOT be answered from the static local model. The manager
+    replies honestly that live sources are unavailable."""
     provider = StubProvider(error=SearchError("down", error_type="network",
                                               retryable=True, provider="stub"))
     agent = ResearchAgent(provider=provider, config=_config(enabled=True))
+    from friday.core.conversation import ConversationManager
+
     mgr = _manager(research_agent=agent, research_enabled=True)
     reply, sent = mgr.handle_transcript(RESEARCH_QUERY)
     assert sent is True
-    assert isinstance(reply, str) and reply  # still answered by local pipeline
+    assert "couldn't retrieve current information" in reply
+    assert mgr.context.last_research is not None
+    assert mgr.context.last_research.success is False
+
+
+def test_manager_research_failure_local_question_falls_through():
+    """A non-time-sensitive query is never researched, so a missing provider
+    cannot change the local pipeline."""
+    from friday.core.conversation import ConversationManager
+
+    mgr = _manager(research_agent=None)
+    reply, sent = mgr.handle_transcript("What is a binary tree?")
+    assert sent is True
+    assert isinstance(reply, str) and reply
 
 
 def test_manager_env_flag_rules_agent_enabled():

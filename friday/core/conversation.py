@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import re
 import time
+import urllib.parse
 
 from friday.core.state import ConversationState, StateMachine
 from friday.core.session import ConversationSession
@@ -16,6 +17,8 @@ from friday.intent.router import route
 from friday.intent.normalizer import normalize, normalize_app_aliases
 from friday.intent.classifier import RequestClass, classify, log_class
 from friday.core.natural_conversation import NaturalConversationRouter
+from friday.core.system_commands import DeterministicSystemRouter
+from friday.core.transcript_quality import CLARIFICATION, assess_transcript
 from friday.safety.validator import validate, Policy
 from friday.safety.confirmation import parse_confirmation_response, format_confirmation_prompt
 from friday.tools import registry
@@ -66,6 +69,31 @@ _NATURAL_CONVERSATION_SKIP_CLASSES = frozenset({
     RequestClass.FOLLOW_UP,
     RequestClass.SCREEN_QUESTION,
 })
+
+# Deterministic System Router: the same conservative stance. Commands, tools,
+# anaphora, follow-ups and screen queries are resolved further down the
+# pipeline and must keep their existing owners.
+_SYSTEM_COMMAND_SKIP_CLASSES = frozenset({
+    RequestClass.COMMAND,
+    RequestClass.TOOL_REQUEST,
+    RequestClass.CONTEXT_REFERENCE,
+    RequestClass.FOLLOW_UP,
+    RequestClass.SCREEN_QUESTION,
+})
+
+# Transcript-quality gate: deterministic, unambiguous system traffic (commands,
+# tool requests, exits) is never second-guessed, and the conversational layer
+# already handles greetings / thanks.
+_TRANSCRIPT_QUALITY_SKIP_CLASSES = frozenset({
+    RequestClass.EXIT,
+    RequestClass.COMMAND,
+    RequestClass.TOOL_REQUEST,
+    RequestClass.SCREEN_QUESTION,
+})
+
+# Only these verdict reasons are hard evidence of a STT mishearing. Everything
+# else falls through to the normal pipeline.
+_STT_REJECT_REASONS = frozenset({"empty", "stt_noise", "stt_low_confidence"})
 
 # Command-like phrasing that gates app-alias expansion. Aliases exist to repair
 # STT mishearings of application names inside actionable commands ("open grom" ->
@@ -125,6 +153,14 @@ _REF_STATUS_NOT_NEEDED = "not_needed"
 _REF_STATUS_RESOLVED = "resolved"
 _REF_STATUS_AMBIGUOUS = "ambiguous"
 _REF_STATUS_UNRESOLVED = "unresolved"
+
+# Research query types with a strong recency requirement: when research is
+# enabled but returns no live evidence for these, the turn must NOT fall back
+# to the static local model (it would answer from stale knowledge). The
+# caller replies honestly that live sources are unavailable instead.
+_RESEARCH_BLOCK_FALLBACK_TYPES = frozenset({
+    "NEWS", "CURRENT_INFORMATION", "TIME_SENSITIVE",
+})
 
 _MALE_PRONOUNS = re.compile(r"\b(he|him|his)\b", re.I)
 _FEMALE_PRONOUNS = re.compile(r"\b(she|her)\b", re.I)
@@ -986,6 +1022,15 @@ class ConversationContext:
         """
         t0 = time.monotonic()
         raw = transcript or ""
+        # Same-turn self-correction: "no jes, I mean Node.js" -> "Node.js".
+        # The speaker has already told us what they meant; the noisy fragment
+        # must never become an antecedent or a new entity.
+        try:
+            corrected = assess_transcript(raw)
+            if corrected.corrected and corrected.text and corrected.text != raw:
+                raw = corrected.text
+        except Exception:  # resolution must never break on the quality helper
+            pass
         low = (raw.lower().strip()).rstrip("?!. ")
         if not low:
             return ReferenceResolution(status=_REF_STATUS_NOT_NEEDED, resolved=raw, latency_ms=0.0)
@@ -1400,6 +1445,9 @@ class ConversationManager:
         research_enabled: Optional[bool] = None,
         natural_conversation_enabled: Optional[bool] = None,
         natural_conversation_router=None,
+        system_commands_enabled: Optional[bool] = None,
+        system_commands_router=None,
+        transcript_quality_enabled: bool = True,
     ):
         self.state_machine = StateMachine(ConversationState.IDLE)
         self.context = ConversationContext()
@@ -1415,6 +1463,15 @@ class ConversationManager:
         if research_enabled is None:
             research_enabled = bool(getattr(research_agent, "enabled", False))
         self.research_enabled = bool(research_enabled)
+        _rconf = getattr(research_agent, "config", None) if research_agent else None
+        logger.info(
+            "[RESEARCH] enabled=%s provider=%s max_results=%s timeout=%s max_queries=%s",
+            str(self.research_enabled).lower(),
+            getattr(_rconf, "provider", "-") if _rconf else "-",
+            getattr(_rconf, "max_results", "-") if _rconf else "-",
+            getattr(_rconf, "timeout", "-") if _rconf else "-",
+            getattr(_rconf, "max_queries", "-") if _rconf else "-",
+        )
         # Natural Conversation Layer: deterministic local answers for pure
         # chatter. Enabled by default; ``None`` means "on" unless the injected
         # router says otherwise.
@@ -1428,6 +1485,21 @@ class ConversationManager:
                 getattr(self.natural_conversation_router, "enabled", True)
             )
         self.natural_conversation_enabled = bool(natural_conversation_enabled)
+        # Deterministic System Router (2026-09-29): locally-answerable system
+        # questions (currently only the current time) never reach the reasoner.
+        self.system_commands_router = (
+            system_commands_router
+            if system_commands_router is not None
+            else DeterministicSystemRouter()
+        )
+        if system_commands_enabled is None:
+            system_commands_enabled = bool(
+                getattr(self.system_commands_router, "enabled", True)
+            )
+        self.system_commands_enabled = bool(system_commands_enabled)
+        # STT quality gate (2026-09-29): uncertain fragments are clarified, not
+        # guessed; explicit self-correction is applied to the rest of the turn.
+        self.transcript_quality_enabled = bool(transcript_quality_enabled)
 
     # ------------------------------------------------------------------
     # Active-session helpers
@@ -1760,6 +1832,71 @@ class ConversationManager:
         self.context.active_question_type = "CONVERSATIONAL"
         return self._respond(result.response)
 
+    def _try_system_command(self, transcript: str, cls) -> Optional[tuple]:
+        """Answer locally-answerable system questions deterministically.
+
+        "what time is it" / "can you tell me the current time?" must never reach
+        Bonsai, which previously replied that it could not provide the time.
+        Runs after the Natural Conversation Layer and before context
+        resolution, RAG/research, tools and the reasoner, so a local answer
+        costs no model call at all.
+        """
+        if not self.system_commands_enabled or self.system_commands_router is None:
+            return None
+        if cls in _SYSTEM_COMMAND_SKIP_CLASSES:
+            return None
+        try:
+            result = self.system_commands_router.route(transcript)
+        except Exception as exc:  # never let the fast path break the pipeline
+            logger.warning("[SYSTEM_CMD] disabled reason=error error=%s", exc)
+            return None
+        if result is None or not result.handled:
+            return None
+        return self._respond(result.response)
+
+    def _apply_transcript_quality(self, transcript: str) -> tuple:
+        """Gate the turn on STT trustworthiness.
+
+        Uncertain fragments ("no jes") must not become entities, explanations or
+        tool calls - Friday asks the speaker to repeat instead of inventing.
+        This runs *before* ``observe_turn``/``update_topic`` so rejected noise
+        never pollutes context memory, and it returns the text the rest of the
+        turn should use (equal to the input unless the speaker self-corrected).
+
+        Returns ``(text_to_use, rejected)``.
+        """
+        if not self.transcript_quality_enabled:
+            return transcript, False
+        try:
+            early_cls = classify(transcript)
+        except Exception:  # classification must never block the gate
+            early_cls = None
+        if early_cls in _TRANSCRIPT_QUALITY_SKIP_CLASSES:
+            return transcript, False
+        try:
+            verdict = assess_transcript(transcript)
+        except Exception as exc:  # never let the fast path break the pipeline
+            logger.warning("[STT_QUALITY] skipped reason=error error=%s", exc)
+            return transcript, False
+        if verdict.ok:
+            if verdict.corrected and verdict.text and verdict.text != transcript:
+                logger.info(
+                    "[STT_QUALITY] raw=%r corrected=%r signals=%r",
+                    transcript, verdict.text, verdict.signals,
+                )
+                return verdict.text, False
+            return transcript, False
+        # Only *evidence of a mishearing* rejects the turn. A short but
+        # well-formed turn ("how are you", "why", "yes") is a classification
+        # matter, not an STT-quality matter, and must keep reaching the pipeline.
+        if verdict.reason not in _STT_REJECT_REASONS:
+            return transcript, False
+        logger.info(
+            "[STT_QUALITY] raw=%r rejected=true reason=%s signals=%r",
+            transcript, verdict.reason, verdict.signals,
+        )
+        return transcript, True
+
     def _conversational_ack(self, transcript: str) -> str:
         """Deterministic reply for pure chatter — no reasoner round-trip (P12)."""
         low = transcript.lower()
@@ -1792,9 +1929,15 @@ class ConversationManager:
         """Optionally run the research subsystem for *transcript*.
 
         Gated by ``research_enabled``. Returns a spoken reply when the research
-        agent returned live evidence, otherwise None so the existing local
-        pipeline handles the turn. Only surfaces evidence — never a synthesized
-        answer (Phase 3+). Failures fall through silently to the reasoner.
+        agent owns the turn, otherwise None so the existing local pipeline
+        handles the turn. Research owns the turn in two cases:
+
+          * live evidence was returned (source-annotated answer), or
+          * the query is genuinely time-sensitive (NEWS / CURRENT_INFORMATION
+            / TIME_SENSITIVE), research is enabled, but the search failed or
+            returned nothing — then the caller must NOT fall back to the
+            static local model, which would answer from stale knowledge.
+            Instead we reply honestly that live sources are unavailable.
         """
         if not self.research_enabled or not self.research_agent:
             return None
@@ -1805,21 +1948,72 @@ class ConversationManager:
             query = ref.resolved if ref.status == _REF_STATUS_RESOLVED else transcript
             self.context.activate_entity(ref.entity, ref.entity_type)
             query = self.context.rewrite_followup(query, st_context.history) or query
+            decision = None
+            _decide = getattr(self.research_agent, "decide", None)
+            if callable(_decide):
+                try:
+                    decision = _decide(query)
+                except Exception:  # noqa: BLE001 - optional observability hook
+                    decision = None
             response = self.research_agent.research(query)
         except Exception as exc:  # noqa: BLE001 - research is optional
             logger.warning("[RESEARCH] agent raised %s: %s", type(exc).__name__, exc)
             return None
         self.context.last_research = response
-        if not response.needs_web or not response.success:
-            return None
-        top = response.results[:2]
-        evidence = " ".join(f"{r.title} — {r.url}" for r in top)
-        spoken = (
-            f"I checked current sources and found {len(response.results)} "
-            f"results. Top: {evidence}"
+        logger.info(
+            "[RESEARCH] decision needs_web=%s type=%s reason=%s query=%r",
+            str(bool(response.needs_web)).lower(),
+            getattr(response, "query_type", "?") or "?",
+            getattr(decision, "reason", "-") if decision else "-", query,
         )
-        logger.info("[RESEARCH] surfacing %d results to user", len(response.results))
-        return self._respond(spoken)
+        if not response.needs_web:
+            return None
+        if response.success and response.results:
+            evidence = self._research_evidence(response.results[:2])
+            spoken = (
+                f"I checked current sources and found {len(response.results)} "
+                f"results. Top: {'; '.join(evidence)}"
+            )
+            logger.info(
+                "[RESEARCH] surfacing %d results type=%s latency_ms=%.0f",
+                len(response.results), response.query_type, response.elapsed_ms,
+            )
+            return self._respond(spoken)
+        # Bounded fallback: time-sensitive query, research enabled, but no live
+        # evidence. Never answer from the static local model in this case.
+        if response.query_type in _RESEARCH_BLOCK_FALLBACK_TYPES:
+            if response.query_type == "NEWS":
+                spoken = ("I couldn't retrieve live news right now. My "
+                          "connection to live sources appears to be unavailable"
+                          " — please try again shortly.")
+            else:
+                spoken = ("I couldn't retrieve current information right now."
+                          " My connection to live sources appears to be "
+                          "unavailable — please try again shortly.")
+            logger.info(
+                "[RESEARCH] bounded_fallback=true type=%s error=%s",
+                response.query_type,
+                response.error.error_type if response.error else "empty_results",
+            )
+            return self._respond(spoken)
+        return None
+
+    @staticmethod
+    def _research_evidence(results) -> list:
+        """Render source-annotated evidence lines (title, domain, URL, date)."""
+        lines = []
+        for r in results:
+            url = str(getattr(r, "url", "") or "")
+            domain = ""
+            try:
+                domain = urllib.parse.urlparse(url).netloc
+            except Exception:  # noqa: BLE001 - cosmetic only
+                domain = ""
+            published_at = getattr(r, "published_at", None)
+            when = published_at.date().isoformat() if published_at else "date unknown"
+            title = str(getattr(r, "title", "") or "").strip() or "(untitled)"
+            lines.append(f"{title} ({domain},{when}) — {url}")
+        return lines
 
     def _reasoner_supports_rag(self) -> bool:
         """True when the reasoner's request() accepts retrieval_context."""
@@ -2010,6 +2204,17 @@ class ConversationManager:
                 )
                 transcript = alias_fixed
 
+        # STT quality gate: run before any context/memory mutation so uncertain
+        # noise ("no jes") can never become an entity, and apply an explicit
+        # same-turn self-correction ("no jes, I mean Node.js" -> "Node.js") to
+        # the rest of this turn.
+        transcript, quality_rejected = self._apply_transcript_quality(transcript)
+        if quality_rejected:
+            # Same state path the rest of the turn uses (LISTENING -> PROCESSING
+            # -> RESPONDING -> LISTENING), so a clarification is a normal turn.
+            self.state_machine.transition_to(ConversationState.PROCESSING)
+            return self._respond(CLARIFICATION)
+
         # Session lifecycle: expire the active session after user inactivity,
         # then refresh the inactivity timer on every processed interaction.
         self._check_session_expiry()
@@ -2187,6 +2392,13 @@ class ConversationManager:
         if natural is not None:
             return natural
 
+        # Deterministic System Router: "what time is it" /
+        # "can you tell me the current time?" is answered from the local clock
+        # instead of being sent to a model that used to say it could not help.
+        system = self._try_system_command(transcript, cls)
+        if system is not None:
+            return system
+
         # Screen / vision question — truthful: we have no screen access.
         if cls == RequestClass.SCREEN_QUESTION:
             return self._respond("I don't currently have access to your screen.")
@@ -2205,6 +2417,7 @@ class ConversationManager:
         # deliberately excluded: it is the residual bucket for command
         # near-misses ("open grove") and noise, which must stay off the model
         # path (fuzzy-router latency contract).
+        research_ran = False
         if cls in (RequestClass.QUESTION, RequestClass.CHAT,
                    RequestClass.FOLLOW_UP):
             self.context.active_question_type = getattr(cls, "name", str(cls))
@@ -2226,6 +2439,7 @@ class ConversationManager:
                         )
                         return self._execute_single_intent(live_intent)
             if not live_query:
+                research_ran = True
                 research_reply = self._try_research(transcript, st_context)
                 if research_reply is not None:
                     return research_reply
@@ -2329,6 +2543,20 @@ class ConversationManager:
                 intent = route(resolved_text)
         else:
             intent = route(resolved_text)
+
+        # --- Live Research Gate ---
+        # Current-information / news queries reach the web research subsystem
+        # *before* the bare reasoner fallback, evaluated on the fully resolved
+        # text. This is independent of the intent classifier: UNKNOWN and
+        # COMMAND-classified news turns ("can you tell me the latest news?")
+        # used to slip straight to the model. ResearchRouter still decides
+        # whether a query is actually research-capable, so non-news turns do
+        # nothing here. The QUESTION/CHAT/FOLLOW_UP branch above already ran
+        # the research hook, so it is not re-entered.
+        if not research_ran:
+            research_reply = self._try_research(resolved_text, st_context)
+            if research_reply is not None:
+                return research_reply
 
         # --- Local Reasoner Fallback Gate ---
         call_reasoner, gating_reason = should_call_reasoner(

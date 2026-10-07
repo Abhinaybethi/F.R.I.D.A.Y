@@ -48,6 +48,8 @@ ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT"
 POSITIVE_FEEDBACK = "POSITIVE_FEEDBACK"
 GOODBYE = "GOODBYE"
 NEGATIVE_FEEDBACK = "NEGATIVE_FEEDBACK"
+READY = "READY"
+USER_STATEMENT = "USER_STATEMENT"
 
 # Small, hand-written pools. No LLM, no generation, deterministic rotation.
 RESPONSES: Dict[str, List[str]] = {
@@ -96,6 +98,24 @@ RESPONSES: Dict[str, List[str]] = {
         "I understand.",
         "Let's see if we can fix it.",
     ],
+    # Readiness: the user is announcing that they are ready for something.
+    # No task is invented - Friday simply acknowledges and waits.
+    READY: [
+        "Ready when you are.",
+        "Okay, I'm ready.",
+        "Ready to go.",
+        "Let's get started.",
+    ],
+    # Ordinary first-person statements get a neutral acknowledgement. Friday
+    # takes no position: no agreement, no disagreement, no persuasion, and no
+    # opinion of its own.
+    USER_STATEMENT: [
+        "Understood.",
+        "Noted.",
+        "I hear you.",
+        "Understood. I can share factual information about that if you'd like.",
+        "Noted. Ask me for the facts whenever you want them.",
+    ],
 }
 
 # Full-segment, fully anchored patterns. A segment is conversational only when
@@ -117,8 +137,11 @@ _INTENT_PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"everything\s+(?:okay|ok|alright|fine|good))$"
     )),
     (THANKS, re.compile(
-        r"^(?:thanks?(?:\s+(?:a\s+lot|lots|very\s+much|much|tons))?|"
+        r"^(?:thanks?(?:\s+(?:a\s+lot|lots|very\s+much|much|tons|so\s+much))?|"
         r"thank\s+you(?:\s+(?:a\s+lot|lots|very\s+much|so\s+much|much|tons))?|"
+        r"thanks?(?:\s+for\s+(?:watching|listening|helping|that|this|it))|"
+        r"thank\s+you(?:\s+for\s+(?:watching|listening|helping|that|this|it))|"
+        r"thanks?\s+for\s+your\s+(?:help|time|assistance)|"
         r"much\s+appreciated|appreciate\s+(?:it|that|your\s+help)|"
         r"that\s+is\s+(?:helpful|super\s+helpful|really\s+helpful)|"
         r"that\s+helped|you\s+(?:are|were)\s+(?:helpful|great|awesome|amazing|"
@@ -148,6 +171,23 @@ _INTENT_PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"not\s+good|that\s+is\s+unfortunate|unfortunate|too\s+bad|"
         r"that\s+sucks|ah\s+man|oh\s+man|hm)(?:\s+friday)?$"
     )),
+    # "and I'm ready." / "ready" / "ok, I'm ready to go"
+    (READY, re.compile(
+        r"^(?:(?:ok|okay|okey|alright|all\s+right|yes|yeah|yep|sure|fine|"
+        r"good|great|alright)\s+)?"
+        r"(?:i\s+am\s+)?ready(?:\s+to\s+(?:go|start|begin|begin\s+now|"
+        r"do\s+it|try))?(?:\s+now)?$"
+    )),
+    # Ordinary first-person statements, including political ones
+    # ("I believe in Russia."). Friday acknowledges without taking a position.
+    (USER_STATEMENT, re.compile(
+        r"^(?:i|we)\s+"
+        r"(?:do\s+not\s+|dont\s+|"
+        r"(?:really\s+|kind\s+of\s+|sort\s+of\s+|completely\s+|totally\s+)*)"
+        r"(?:believe|think|feel|reckon|guess|assume|suppose|hold|view|"
+        r"support|oppose|prefer|like|dislike|love|hate|want|need|"
+        r"agree|disagree|remember|noticed|realized|found)\b"
+    )),
 ]
 
 # Any of these means the utterance is doing real work: never swallow it.
@@ -171,6 +211,14 @@ _SUBSTANTIVE_WORD = re.compile(
 _CONTEXT_DEPENDENT = re.compile(
     r"\b(?:it|its|they|them|their|those|this|that|he|him|his|she|her|"
     r"more|else|another|again|the\s+same|one|ones)\b"
+)
+# A statement that also carries an action request is a request, not chatter:
+# "I think you should search for Python" must reach the pipeline.
+_STATEMENT_BLOCKED = re.compile(
+    r"\b(?:you\s+should|you\s+need\s+to|you\s+can|please|"
+    r"search|open|close|launch|play|show|tell|explain|describe|find|"
+    r"look\s+up|send|write|create|make|build|run|install|download|delete|"
+    r"remind|schedule|translate|calculate|navigate|browse|screenshot)\b"
 )
 _FILLER = re.compile(r"^(?:um|uh|erm|hmm|mm|hm|eh|like|well|so|please|just|now)$")
 
@@ -203,8 +251,8 @@ _CONTRACTIONS: List[Tuple[re.Pattern, str]] = [
 
 # Segments are split on the separator kept by normalize() and on connectives.
 _SEGMENT_SPLIT = re.compile(r"\s*\|\s*|\s+(?:and|then|also|but|plus)\s+")
+# The utterance as a whole must stay short: long rambling is real work.
 _MAX_TOTAL_TOKENS = 10
-_MAX_SEGMENT_TOKENS = 6
 
 
 def _config_bool(value, default: bool = True) -> bool:
@@ -352,13 +400,24 @@ class NaturalConversationRouter:
     def _segments(normalized: str) -> List[str]:
         if not normalized:
             return []
-        return [seg.strip() for seg in _SEGMENT_SPLIT.split(normalized) if seg and seg.strip()]
+        segments: List[str] = []
+        for raw in _SEGMENT_SPLIT.split(normalized):
+            tokens = [
+                token for token in raw.strip().split()
+                if token not in ("and", "then", "also", "but", "plus")
+            ]
+            if tokens:
+                segments.append(" ".join(tokens))
+        return segments
 
     @staticmethod
     def _match_intent(segment: str) -> str:
         for intent, pattern in _INTENT_PATTERNS:
-            if pattern.match(segment):
-                return intent
+            if not pattern.match(segment):
+                continue
+            if intent == USER_STATEMENT and _STATEMENT_BLOCKED.search(segment):
+                return ""
+            return intent
         return ""
 
     @staticmethod
@@ -408,12 +467,6 @@ class NaturalConversationRouter:
 
         intents: List[str] = []
         for segment in segments:
-            if len(segment.split()) > _MAX_SEGMENT_TOKENS:
-                self.metrics.record_rejected()
-                logger.debug(
-                    "[NATURAL_CHAT] handled=false reason=too_long text=%r", raw,
-                )
-                return None
             intent = self._match_intent(segment)
             if not intent:
                 reason = self._substantive_reason(segment)
@@ -422,6 +475,8 @@ class NaturalConversationRouter:
                     "[NATURAL_CHAT] handled=false reason=%s text=%r", reason, raw,
                 )
                 return None
+            # A conservative anchored pattern is a strong signal on its own; the
+            # overall token cap (checked above) is the length guard.
             intents.append(intent)
 
         # Every segment is conversational: the utterance is pure chatter.

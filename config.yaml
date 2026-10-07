@@ -94,7 +94,7 @@ rag:
   no_context_message: "I don't have enough relevant information in my knowledge base to answer that confidently."
 
 research:
-  enabled: false                 # opt-in: Phase 1/2 web research subsystem
+  enabled: true                  # set false (kill switch) to disable live web research
   provider: "duckduckgo"         # WEB_SEARCH_PROVIDER overrides
   api_key: ""                    # WEB_SEARCH_API_KEY (duckduckgo needs none)
   max_results: 5                 # WEB_SEARCH_MAX_RESULTS
@@ -104,6 +104,11 @@ research:
 
 natural_conversation:
   enabled: true                 # FRIDAY_NATURAL_CONVERSATION_ENABLED overrides
+
+# Locally answerable system questions (currently: the current time) are kept
+# out of the reasoner. See friday/core/system_commands.py for scope.
+system_commands:
+  enabled: true                 # FRIDAY_SYSTEM_COMMANDS_ENABLED overrides
 
 logging:
   level: "INFO"

@@ -594,5 +594,56 @@ def test_same_turn_anchor_keeps_person_ambiguity_rules():
     assert res.status != _REF_STATUS_RESOLVED or res.entity != "node man"
 
 
+# ---------------------------------------------------------------------------
+# 2026-09-29 voice run: noisy STT fragments must not become entities
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("text,expected", [
+    ("no jes, I mean Node.js", "node.js"),
+    ("not no jes, Node.js", "node.js"),
+    ("no, Node.js", "node.js"),
+])
+def test_self_correction_resolves_to_the_explicit_term(text, expected):
+    ctx = ConversationContext()
+    res = ctx.resolve_conversation_reference(text)
+    assert res.status == _REF_STATUS_NOT_NEEDED
+    assert expected in res.resolved.lower()
+    assert "no jes" not in res.resolved.lower()
+
+
+def test_explicit_node_query_is_untouched():
+    ctx = ConversationContext()
+    for text in ("what is node.js", "tell me about node.js"):
+        res = ctx.resolve_conversation_reference(text)
+        assert res.resolved.lower().startswith(text.lower()[:12])
+
+
+def test_node_man_fix_survives_the_stt_quality_pass():
+    ctx = ConversationContext()
+    ctx.observe_turn("who is the president of russia")
+    res = ctx.resolve_conversation_reference(_NODE_MAN)
+    assert "node man" in res.resolved.lower()
+    assert "russia" not in res.resolved.lower()
+    assert res.entity == "node man"
+
+
+def test_noise_fragment_alone_is_never_promoted_to_an_entity():
+    ctx = ConversationContext()
+    ctx.observe_turn("can you tell me about? no jes")
+    for name in _entity_names(ctx):
+        assert "no jes" not in name.lower()
+        assert "no jess" not in name.lower()
+
+
+def _entity_names(ctx):
+    """Every entity name currently held in structured context."""
+    names = []
+    for attr in ("_entity_candidates", "candidates", "entities"):
+        value = getattr(ctx, attr, None)
+        if isinstance(value, list):
+            for item in value:
+                names.append(str(getattr(item, "name", item)))
+    return names
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--no-header"])

@@ -22,6 +22,7 @@ from friday.voice.text_to_speech import TextToSpeech
 from friday.core.wake_word import WakeWordListener
 from friday.core.conversation import ConversationManager, ConversationState
 from friday.core.natural_conversation import NaturalConversationRouter
+from friday.core.system_commands import DeterministicSystemRouter
 from friday.voice.state_machine import VoiceState, VoiceStateMachine
 from friday.intent.normalizer import normalize
 from friday.reasoning.interface import Reasoner
@@ -185,6 +186,7 @@ class Friday:
             rag_service=_build_rag_service(self.config.get("rag", {})),
             research_agent=_build_research_agent(self.config.get("research", {})),
             natural_conversation_router=NaturalConversationRouter.from_config(self.config),
+            system_commands_router=DeterministicSystemRouter.from_config(self.config),
         )
         if getattr(self.conversation_manager, "rag_service", None):
             self.conversation_manager.rag_service.start_background_ingest()
