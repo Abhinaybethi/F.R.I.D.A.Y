@@ -258,6 +258,10 @@ def _dispatch(action: Action, target: str, is_dry_run: bool, intent: Optional[In
     if action == Action.SYSTEM_CANCEL:
         return {"success": True, "message": "Cancelled.", "spoken_message": "Cancelled."}
 
+    if action == Action.IMAGE_GENERATION:
+        from friday.tools import image_gen
+        return image_gen.generate_image(target, dry_run=is_dry_run, intent=intent)
+
     return {"success": False, "message": f"No tool registered for action: {action.name}"}
 
 
@@ -285,4 +289,5 @@ _DEFAULT_PERMISSIONS: dict = {
     "system_cancel": True,
     "system_help":  True,
     "system_repeat": True,
+    "generate_image": True,
 }

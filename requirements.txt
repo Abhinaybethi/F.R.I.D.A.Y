@@ -19,6 +19,11 @@ psutil>=6.0.0
 # Config
 PyYAML>=6.0.2
 
+# Optional local dashboard (`python -m friday.web`)
+fastapi>=0.110
+uvicorn>=0.29
+websockets>=12.0
+
 # --- Optional: Windows-only voice-volume control ---
 # Uncomment these two lines if you're on Windows and want the
 # "set volume to X" voice command to work:

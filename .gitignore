@@ -13,8 +13,18 @@ pipeline_metrics.txt
 stress_metrics.txt
 # Runtime data
 data/chroma/
+data/dashboard/
 logs/*.log
 logs/*.log.*
+
+# Generated artifacts
+output/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 
 # Keep the directory
 !logs/.gitkeep

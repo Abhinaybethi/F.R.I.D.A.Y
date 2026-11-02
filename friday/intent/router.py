@@ -73,6 +73,32 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
     (re.compile(r"^(?:close|quit|exit|kill|stop|terminate)\s+(?:the\s+)?(.+)$"),
      lambda m: (Action.CLOSE_APP, m.group(1), _HIGH)),
 
+    # 2.5 IMAGE_GENERATION — local Qwen-Image. "X of Y" patterns must precede
+    # SEARCH_WEB (3) and FIND_FILE (5) so "search/find an image of Y" lands here
+    # instead of on web/file search. Non-image searches still route normally.
+    (re.compile(r"^(?:generate|create|make|produce|draw|paint|capture)\s+(?:me\s+)?"
+                r"(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual|sketch|painting)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:search\s+(?:for\s+)?|find\s+)"
+                r"(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:give|show)\s+me\s+(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:draw|paint|sketch)\s+(.+)$", re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
     # 3. SEARCH_WEB
     (re.compile(r"^(?:search(?:\s+(?:for|the web for|online for))?|"
                 r"look up|google|find online)\s+(.+)$"),
@@ -245,7 +271,7 @@ def route(raw_text: str) -> Intent:
             Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
             Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
             Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA,
-            Action.GREETING, Action.PLAY_VIDEO
+            Action.GREETING, Action.PLAY_VIDEO, Action.IMAGE_GENERATION
         ):
             target_name, target_conf = target_raw, 1.0
             arguments = {}

@@ -38,6 +38,7 @@ _ACTION_PERMISSION_KEY: dict[Action, str] = {
     Action.PAUSE_MEDIA:     "pause_media",
     Action.PLAY_VIDEO:      "play_video",
     Action.GREETING:        "greeting",
+    Action.IMAGE_GENERATION: "generate_image",
 }
 
 

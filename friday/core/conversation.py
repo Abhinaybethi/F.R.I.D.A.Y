@@ -460,7 +460,19 @@ class ConversationContext:
             return
         if re.search(r"\b(actually|forget|never mind|switch topic|onto something else)\b", low):
             self.active_topic = ""
-            return
+            # A switch-away often carries the next question in the same
+            # utterance ("Actually, forget that. What is the Eiffel Tower?").
+            # The new topic must win over the cleared one, so extract from the
+            # remainder instead of returning early — otherwise the next
+            # pronoun follow-up falls back to a stale entity anchor.
+            remainder = re.split(
+                r"\b(?:actually|forget(?:\s+that)?|never\s+mind|switch\s+topic|"
+                r"onto\s+something\s+else)\b[,.;:]?\s*",
+                low,
+            )[-1].strip()
+            if not remainder:
+                return
+            low = remainder
         topic = None
         for pat in (
             r"\b(tell|ask|explain|describe)\s+(?:me\s+)?about\s+(.+?)\??$",
@@ -561,12 +573,36 @@ class ConversationContext:
             t = str((turn or {}).get("transcript", "")).strip()
             if not t or len(t.split()) < 3 or t.lower() == low:
                 continue
-            if self._CONV_FRAGMENT.match(t) and len(t.split()) <= 5:
+            if self._CONV_FRAGMENT.match(t) and self._is_fragment_turn(t):
                 continue
             if t.lower() in low:
                 continue
             return t
         return ""
+
+    _FRAGMENT_STOPWORDS = frozenset({
+        "what", "who", "when", "where", "why", "how", "and", "but", "so",
+        "then", "about", "it", "its", "that", "this", "they", "them", "those",
+        "these", "is", "are", "was", "were", "did", "does", "do", "the", "a",
+        "an", "of", "in", "on", "to", "for", "me", "you", "we", "i", "more",
+        "mean", "by", "him", "her", "his", "their", "one", "okay", "ok",
+        "sure", "hmm", "huh", "yes", "no",
+    })
+
+    def _is_fragment_turn(self, t: str) -> bool:
+        """True only for genuine fragments ("tell me more about him", "why?").
+
+        A short prior question that carries its own subject ("What backend
+        does F.R.I.D.A.Y. use?" is five tokens) is substantive, not a
+        fragment — skipping it would anchor a connector follow-up on an
+        older, wrong turn.
+        """
+        words = [w.strip("?!.,").lower() for w in t.split()]
+        content = [
+            w for w in words
+            if w and len(w) > 2 and w not in self._FRAGMENT_STOPWORDS
+        ]
+        return not content
 
     def _role_ellipsis_query(self, text: str) -> str:
         """Build a clean role-of-anchor question for bare role phrasing.
@@ -1448,6 +1484,7 @@ class ConversationManager:
         system_commands_enabled: Optional[bool] = None,
         system_commands_router=None,
         transcript_quality_enabled: bool = True,
+        on_progress: Optional[callable] = None,
     ):
         self.state_machine = StateMachine(ConversationState.IDLE)
         self.context = ConversationContext()
@@ -1457,6 +1494,7 @@ class ConversationManager:
         self.reasoner = reasoner or OllamaReasoner()
         # None means "use registry defaults" (all enabled) — backward compatible
         self.permissions = permissions
+        self.on_progress = on_progress
         self.rag_service = rag_service
         self._reasoner_rag_support: Optional[bool] = None
         self.research_agent = research_agent
@@ -2091,6 +2129,13 @@ class ConversationManager:
     def _execute_single_intent(self, intent: Intent) -> tuple[str, bool]:
         """Validated single-intent execution + context recording (SAFE policy)."""
         self.state_machine.transition_to(ConversationState.EXECUTING)
+        if (
+            not self.dry_run
+            and self.allow_real_execution
+            and intent.action == Action.IMAGE_GENERATION
+            and callable(self.on_progress)
+        ):
+            self.on_progress("Generating the image now.")
         result = registry.execute(
             intent,
             dry_run=self.dry_run,
@@ -2581,6 +2626,14 @@ class ConversationManager:
                 self.context.last_resolved_query = resolved_text
                 self.context.last_resolution_status = ref.status
                 self.context.activate_entity(ref.entity, ref.entity_type)
+            # Mirror the QUESTION-branch follow-up rewrite: connector/pronoun
+            # follow-ups that detour here through the " and "/" then " COMMAND
+            # heuristic ("And after the migration?") must still reach the model
+            # as standalone grounded queries, never as dangling fragments.
+            resolved_text = self.context.rewrite_followup(
+                resolved_text or transcript, st_context.history
+            )
+            self.context.last_resolved_query = resolved_text
             try:
                 # Informational / unclassified phrasing always goes to the
                 # reasoner in CHAT mode. Mode=action would send a bare natural-

@@ -29,6 +29,7 @@ class Action(Enum):
     MUTE_AUDIO    = auto()
     UNMUTE_AUDIO  = auto()
     PAUSE_MEDIA   = auto()
+    IMAGE_GENERATION = auto()
     UNKNOWN       = auto()
 
 

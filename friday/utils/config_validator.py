@@ -28,6 +28,15 @@ VALID_PERMISSION_KEYS = {
     "take_screenshot",
     "play_video",
     "greeting",
+    "generate_image",
+    "read_website",
+    "remember",
+    "recall",
+    "forget",
+    "set_volume",
+    "mute_audio",
+    "unmute_audio",
+    "pause_media",
 }
 
 

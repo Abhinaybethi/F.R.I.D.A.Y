@@ -33,6 +33,7 @@ _VERIFIER_TABLE: dict[Action, Callable] = {
     Action.UNMUTE_AUDIO:    action_verifiers.verify_unmute_audio,
     Action.PAUSE_MEDIA:     action_verifiers.verify_pause_media,
     Action.SYSTEM_STOP:     action_verifiers.verify_system_stop,
+    Action.IMAGE_GENERATION: action_verifiers.verify_image_generation,
 }
 
 

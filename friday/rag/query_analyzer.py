@@ -51,8 +51,29 @@ _ENTITY_PATTERNS = {
     "frontend": r"\b(frontend|ui|web app|dashboard|react|interface)\b",
     "backend": r"\b(backend|server[- ]side|node|flask|django|fastapi)\b",
 }
-_PRONOUN_REF = re.compile(r"\b(it|its|that|this|them|they)\b", re.I)
+_PRONOUN_REF = re.compile(r"\b(it|its|that|this|them|they|those)\b", re.I)
 _FOLLOWUP_SHORT = re.compile(r"^(why|how|what|what about|and|but|so|then|which|who|when|where)\b", re.I)
+
+# Naming clauses that introduce a concrete subject inside the question itself.
+# Mirrors the convention already used by friday.core.conversation (same-turn
+# anchor detection): "what is X", "which is X", "define X", "explain X",
+# "meaning of X".
+_NAMING_CLAUSE = re.compile(
+    r"\b(?:what|which)\s+(?:is|are|was|were)\s+([a-z0-9][a-z0-9\s+#'\-]{0,30})"
+    r"|\b(?:define|explain|meaning\s+of)\s+([a-z0-9][a-z0-9\s+#'\-]{0,30})",
+    re.IGNORECASE,
+)
+# Trailing words that make a captured phrase a vague referent, not a subject.
+_NAMED_SUBJECT_VAGUE = frozenset({
+    "it", "its", "this", "that", "these", "those", "they", "them", "their",
+    "he", "him", "his", "she", "her", "one", "ones", "thing", "things",
+    "stuff", "purpose", "point", "matter", "difference", "example", "examples",
+    "use", "uses", "used", "using", "work", "works", "working",
+})
+_DISCOURSE_WORDS = frozenset({
+    "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is", "are",
+    "was", "were", "does", "do", "did", "how", "why", "what", "which", "who",
+})
 
 
 def _hits(text: str, hints) -> bool:
@@ -160,12 +181,44 @@ def _compact_conversation(history: List[dict], max_turns: int = 3) -> str:
     return "\n".join(lines)
 
 
+def _names_own_subject(text: str) -> bool:
+    """True when the question already introduces a concrete named subject.
+
+    "What is JWT?" and "What is RAG and how does it work?" carry their own
+    antecedent (the named subject, or an in-turn antecedent for the pronoun),
+    so appending the previous turn's topic would only misdirect retrieval with
+    an unrelated parenthetical. Bare fragments ("Why?", "And after?") and
+    dangling-pronoun follow-ups ("Why is it slow?", "Which model does it use?")
+    name no subject and still receive the prior-topic append.
+    """
+    for match in _NAMING_CLAUSE.finditer(text.lower()):
+        phrase = re.sub(r"\s+", " ", (match.group(1) or match.group(2) or "")).strip()
+        # The capture may run past the subject ("what is rag and how does it
+        # work" captures "rag and how does it work"): keep only the first clause.
+        phrase = re.split(r"\s+(?:and|then|but|plus|that)\s+", phrase)[0].strip()
+        phrase = phrase.strip("?!,. ")
+        words = [w for w in phrase.split() if w]
+        if not words:
+            continue
+        if words[-1] in _NAMED_SUBJECT_VAGUE:
+            continue
+        if not any(w not in _DISCOURSE_WORDS and w not in _NAMED_SUBJECT_VAGUE for w in words):
+            continue
+        return True
+    return False
+
+
 def _resolve_followup(raw: str, history: List[dict]) -> str:
     """Resolve weak follow-ups into a retrievable query using recent context."""
     text = raw.strip()
     short = _FOLLOWUP_SHORT.match(text) and len(text.split()) <= 8
     has_pronoun = bool(_PRONOUN_REF.search(text))
     if not (short or has_pronoun):
+        return text
+    # A question that already names its own subject is self-contained: never
+    # append the previous turn's topic to it (answer-replay / misdirected
+    # retrieval regression).
+    if _names_own_subject(text):
         return text
 
     # Recover the most recent substantive topic from history.

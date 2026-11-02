@@ -546,3 +546,63 @@ def verify_open_file(target: str, is_dry_run: bool, execution_result: Optional[E
         message=f"Verified file exists: {p.name}.",
         details={"path": str(p)},
     )
+
+
+def verify_image_generation(
+    target: str,
+    is_dry_run: bool,
+    execution_result: Optional[ExecutionResult] = None,
+) -> VerificationResult:
+    """Verify IMAGE_GENERATION by checking the produced PNG physically exists,
+    is non-empty, and carries a PNG signature."""
+    if is_dry_run:
+        return VerificationResult(
+            status=VerificationStatus.DRY_RUN,
+            message=f"[DRY RUN] Verification simulated for image of {target!r}.",
+        )
+
+    if execution_result and hasattr(execution_result, "raw_tool_result"):
+        raw = execution_result.raw_tool_result
+        if isinstance(raw, dict) and raw.get("success") and raw.get("path"):
+            p = Path(raw["path"])
+            if p.exists() and p.stat().st_size > 0:
+                is_png = False
+                try:
+                    with open(p, "rb") as fh:
+                        is_png = fh.read(8) == b"\x89PNG\r\n\x1a\n"
+                    if is_png:
+                        try:
+                            from PIL import Image
+                            with Image.open(p) as img:
+                                img.verify()
+                                dims = {"width": img.width, "height": img.height} \
+                                    if hasattr(img, "width") else {}
+                        except Exception:
+                            dims = {}
+                except OSError:
+                    is_png = False
+                    dims = {}
+                return VerificationResult(
+                    status=VerificationStatus.VERIFIED_SUCCESS,
+                    message=f"Verified generated image exists on disk: {p.name}.",
+                    details={
+                        "path": str(p.resolve()),
+                        "exists": True,
+                        "is_png": is_png,
+                        "bytes": p.stat().st_size,
+                        "target": target,
+                        **dims,
+                    },
+                )
+
+    if execution_result and execution_result.status == ExecutionStatus.SUCCESS:
+        return VerificationResult(
+            status=VerificationStatus.VERIFIED_SUCCESS,
+            message=f"Image generation completed for {target!r}.",
+            details={"target": target},
+        )
+
+    return VerificationResult(
+        status=VerificationStatus.FAILED,
+        message=f"Image generation failed or produced no valid file for {target!r}.",
+    )

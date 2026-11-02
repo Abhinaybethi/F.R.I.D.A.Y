@@ -24,6 +24,48 @@ tools:
     take_screenshot: true
     play_video: true
     greeting: true
+    generate_image: true
+
+# Local Qwen-Image-2.1 GGUF generation via stable-diffusion.cpp (sd-cli).
+# Nothing loads at startup; the first generation request performs a lazy
+# load. All values are overridable via FRIDAY_*_PATH / FRIDAY_QWEN_* env vars
+# (see docs/IMAGE_GENERATION.md). Model layout:
+#   models/qwen-image/diffusion/*.gguf      (Qwen-Image-2.1 diffusion model)
+#   models/qwen-image/text_encoder/*.gguf   (Qwen3-VL-8B-Instruct GGUF)
+#   models/qwen-image/vae/*.safetensors     (Qwen-Image-2.1 VAE)
+# python -m friday.image setup  downloads all of the above (verified, explicit).
+image:
+  enabled: true
+  provider: "qwen-image"
+  executable: "sd-cli"            # FRIDAY_QWEN_SD_EXECUTABLE
+  model_path: ""                  # FRIDAY_QWEN_IMAGE_MODEL_PATH ("" = discovery)
+  text_encoder_path: ""           # FRIDAY_QWEN_TEXT_ENCODER_PATH
+  vae_path: ""                    # FRIDAY_QWEN_VAE_PATH
+  output_dir: "output/generated_images"   # FRIDAY_QWEN_OUTPUT_DIR
+  device: "auto"                  # auto | cuda | cpu (FRIDAY_QWEN_DEVICE)
+  text_encoder_device: "auto"     # auto | cpu | gpu — keep the ~4.3GB text
+                                  # encoder off small GPUs (auto => CPU when
+                                  # CUDA VRAM < 10 GB). FRIDAY_QWEN_TEXT_ENCODER_DEVICE
+  keep_loaded: true               # retains preflight state between requests
+  prompt_enhancement: false       # optional prompt suffix augmentation
+  # Latency note: on a 6GB GPU with the text encoder on CPU, 768x768 @ 8 steps
+  # takes ~5 min. Raising either multiplies that; keep the timeout generous.
+  width: 768
+  height: 768
+  steps: 8
+  cfg_scale: 2.5
+  sampling_method: "euler"
+  flow_shift: 3.0
+  vae_tiling: true                # low-VRAM friendly
+  diffusion_fa: true              # computes attention in fp32 (Flash Attention)
+  offload_to_cpu: true            # keep VRAM footprint low on 6GB-class GPUs
+  free_vram_before_generate: true # stop F.R.I.D.A.Y.'s own reasoner server during
+                                  # generation so the ~4GB diffusion model stays
+                                  # GPU-resident (~2x faster); FRIDAY_QWEN_FREE_VRAM
+  extra_args: ""                  # extra tokens appended to each sd-cli run (override
+                                  # text_encoder_device placement if they contain --backend), e.g.
+                                  #   --model-args qwen_image_2_1_prefix_cache_type=q4_0
+  timeout: 900
 
 voice:
   offline_only: true

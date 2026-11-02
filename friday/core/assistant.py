@@ -172,6 +172,13 @@ class Friday:
                 self.logger.warning("[STARTUP] llama.cpp reasoning server unavailable")
                 self.logger.warning("[STARTUP] Deterministic commands remain operational")
 
+        # Let image generation borrow the reasoner's GPU VRAM: the manager runs
+        # this hook before a generation to stop the server, then restarts it.
+        from friday.image.gpu_hooks import clear_gpu_release_hooks, register_gpu_release_hook
+        clear_gpu_release_hooks()
+        if self.server_manager is not None:
+            register_gpu_release_hook(self._free_reasoner_gpu)
+
         self.logger.info(
             "[STARTUP] Reasoning provider: %s (model=%s endpoint=%s)",
             provider, self.reasoner.model, getattr(self.reasoner, "base_url", None) or getattr(self.reasoner, "endpoint", None),
@@ -187,6 +194,7 @@ class Friday:
             research_agent=_build_research_agent(self.config.get("research", {})),
             natural_conversation_router=NaturalConversationRouter.from_config(self.config),
             system_commands_router=DeterministicSystemRouter.from_config(self.config),
+            on_progress=self._progress_speaker,
         )
         if getattr(self.conversation_manager, "rag_service", None):
             self.conversation_manager.rag_service.start_background_ingest()
@@ -249,6 +257,37 @@ class Friday:
         response, keep_running = self.conversation_manager.handle_transcript(transcript)
         self.logger.info("[ASSISTANT] Final response: %r", response)
         return response, keep_running
+
+    def _free_reasoner_gpu(self):
+        """Stop F.R.I.D.A.Y.'s own llama.cpp server so image generation can use
+        the GPU VRAM. Returns a callable that restarts it, or None when there is
+        no owned server to release."""
+        manager = self.server_manager
+        if manager is None or not manager.is_owned():
+            return None
+        self.logger.info("[GPU] Releasing reasoner VRAM for image generation")
+        manager.stop()
+
+        def _restore():
+            self.logger.info("[GPU] Restarting reasoner server")
+            try:
+                manager.start()
+            except Exception as e:
+                self.logger.warning("[GPU] reasoner restart failed: %s", e)
+
+        return _restore
+
+    def _progress_speaker(self, phrase: str) -> None:
+        """Speak an interleaved progress phrase (e.g. "Generating the image now.")
+        when voice mode is active. No-op in text mode (tts is None)."""
+        if "image" in phrase.lower():
+            from friday.ui.notify import emit_status_event
+            emit_status_event("GENERATING")
+        if self.tts is not None:
+            try:
+                self.tts.speak(phrase)
+            except Exception as e:
+                self.logger.error("[TTS] Progress phrase failed: %s", e)
 
     def _handle(self, transcript: str) -> bool:
         """
