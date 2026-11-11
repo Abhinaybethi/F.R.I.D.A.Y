@@ -3,16 +3,33 @@ Knowledge skill: answers general questions using the local LLM (if Ollama
 is running) grounded with a quick free web search, falling back to a plain
 web-search summary if no LLM is available.
 """
+from typing import List, TypedDict
+
+from friday.brain.web_search import WebSearch, SearchResult
 from friday.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def web_search_answer(query: str, web_search) -> str:
-    results = web_search.search(query, max_results=3)
+def _format_summary(results: List[SearchResult]) -> str:
+    """Return a concise 1‑2 sentence summary from the top result."""
+    if not results:
+        return ""
+    top = results[0]
+    # If the body itself is a short sentence, use it directly.
+    if len(top["summary"].split()) <= 12:
+        return top["summary"].strip()
+    # Otherwise truncate to ~20 words and add ellipsis.
+    words = top["summary"].split()[:20]
+    return " ".join(words) + "…"
+
+
+def web_search_answer(query: str, web_search: WebSearch) -> str:
+    results: List[SearchResult] = web_search.search(query, max_results=3)
     if not results:
         return f"I couldn't find anything online for {query}."
-    return f"Here's what I found: {results[0]['summary']}"
+    summary = _format_summary(results)
+    return f"Here's what I found: {summary}"
 
 
 def answer_question(question: str, llm_client, web_search) -> str:

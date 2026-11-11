@@ -8,6 +8,8 @@ The system is designed around a **local-first architecture**: speech processing 
 
 ## 🚀 Current Architecture
 
+![F.R.I.D.A.Y. Neural Hologram](frontend/public/assets/holographic-reference.png)
+
 ```text
                     ┌──────────────────────┐
                     │      Microphone      │
@@ -595,22 +597,38 @@ Memory is stored locally rather than being dependent on a cloud memory service.
 
 ---
 
-# 🖥️ Desktop Overlay
+# 📟 Status, Overlay & System Tray Indicator
 
-F.R.I.D.A.Y. includes a Windows desktop overlay for interacting with the assistant.
+F.R.I.D.A.Y. ships a lightweight status layer plus an optional desktop overlay:
 
-The overlay provides functionality such as:
+* `friday/ui/status.py` — state text formatting (`IDLE`, `LISTENING`, `THINKING`, `SPEAKING`, …).
+* `friday/ui/tray.py` — a system tray status indicator: formatted tooltips, icon
+  identifiers, and menu-action hooks for system integration.
+* `friday/ui/notify.py` — a thread-safe image/status event bus. Publishers (the
+  image tool, the assistant progress phrase) never touch the UI directly.
+* `friday/ui/overlay.py` — a frameless, always-on-top status chip (bottom-right)
+  that expands to show the just-generated image plus the confirmation phrase.
 
-* Audio capture
-* Microphone selection
-* WebSocket connection
-* Session management
-* Start/Stop capture
-* Connection recovery
-* Click-through mode
-* Visibility controls
+The overlay is standard-library only (tkinter). It is opt-in: set
+`FRIDAY_OVERLAY=1` and generated images are displayed automatically (verified on
+this machine at 420×420 thumbnails). Prefer a plain tk.PhotoImage path when
+Pillow is absent. Optional extras, best effort: `pywin32` enables click-through,
+Pillow sharpens thumbnail scaling.
 
-The overlay communicates with the F.R.I.D.A.Y. backend in real time.
+```powershell
+# Opt-in inside F.R.I.D.A.Y.
+$env:FRIDAY_OVERLAY = "1"
+
+# Standalone demo with an existing image
+python -m friday.ui.overlay --image output\generated_images\2026-10-12\image_001.png
+```
+
+> Note: earlier README drafts described a click-through desktop overlay with a
+> WebSocket connection to a FastAPI backend. That architectured overlay does
+> **not** exist here — the shipped overlay is fully in-process (no server). The
+> optional **web dashboard** described later is a separate interface served by
+> the local FastAPI adapter; it does not control the desktop overlay.
+
 
 ---
 
@@ -657,17 +675,20 @@ Speaker
 | Component     | Technology       |
 | ------------- | ---------------- |
 | Language      | Python           |
-| Backend       | FastAPI          |
+| Interface     | Voice (wake word) + terminal text mode + local web dashboard |
 | LLM           | Bonsai           |
 | LLM Format    | GGUF             |
 | Inference     | llama.cpp        |
+| Image Generation | Qwen-Image-2.1 GGUF via stable-diffusion.cpp (`sd-cli`) |
 | STT           | faster-whisper   |
 | VAD           | Silero VAD       |
 | TTS           | Kokoro ONNX / Piper |
 | Embeddings    | all-MiniLM-L6-v2 (ONNX, local) |
 | Retrieval     | hybrid vector + BM25 (self-contained) |
 | Memory        | SQLite           |
-| Communication | WebSocket / HTTP |
+| Communication | In-process event bus; optional FastAPI + WebSocket dashboard |
+| Dashboard API | FastAPI + uvicorn (`friday/web/`)       |
+| Dashboard UI  | React + TypeScript + Vite (`frontend/`) |
 | ML Runtime    | ONNX Runtime     |
 | Logging       | loguru           |
 | OS            | Windows          |
@@ -696,19 +717,20 @@ F.R.I.D.A.Y/
 │   ├── safety/              # permissions, confirmation, validator
 │   ├── response/            # response engine
 │   ├── system_control/      # app/file/system control
-│   ├── ui/                  # tray, status
+│   ├── ui/                  # tray, status, notify (event bus), overlay (Tk chip)
 │   ├── utils/               # logger, audit log, config validation, diagnostics
 │   ├── verification/        # verifiers, formatters
-│   └── voice/               # VAD, STT, TTS, session manager, state machine
+│   ├── voice/               # VAD, STT, TTS, session manager, state machine
+│   └── web/                 # optional local dashboard API (FastAPI + WebSocket)
 │
-├── desktop/
-│   └── stealth_overlay.py
+├── frontend/                # optional React + TypeScript + Vite dashboard
+│   └── src/                 # pages, components, state, styles
 │
 ├── models/
 │
 ├── scripts/
 │
-├── tests/                   # 133 test modules
+├── tests/                   # 139 test modules
 │
 ├── config.yaml
 ├── main.py
@@ -836,6 +858,88 @@ python main.py --text
 ```
 
 Text mode is useful for testing the reasoning and command pipeline without using the microphone.
+
+---
+
+# 🖥️ Live Dashboard (Optional Web UI)
+
+F.R.I.D.A.Y. ships with a local-first web dashboard that reads the **real** runtime: CPU/RAM/GPU
+telemetry, service health, the active model, agents, tools, tasks, activity, voice state, and Qwen
+image generation. It is an adapter over the existing assistant modules — starting it does not load
+models or spawn extra inference servers until you actually send a chat, research, or image request.
+
+## Start the dashboard
+
+Build the frontend once (or use the Vite dev server), then run the API:
+
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+
+python -m friday.web --host 127.0.0.1 --port 8420
+```
+
+Open <http://127.0.0.1:8420>. The backend serves `frontend/dist` when it exists.
+
+For frontend development with hot reload:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Vite runs on <http://127.0.0.1:5173> and proxies `/api` and `/ws` to port `8420`.
+
+## How it stays honest
+
+- Every number is measured on this machine (`psutil`, `nvidia-smi`); unavailable values render as
+  `N/A` instead of zero-filled placeholders.
+- When the backend is unreachable, the metrics rail says **Stale** and keeps the last known samples.
+- Voice capture is owned by the desktop runtime. In the browser the pipeline shows **Awaiting
+  input** and the orb stays inactive unless `capture_active` is genuinely `true`.
+- Research and image results come from the real providers; failures are shown with the provider's
+  actual error. No progress percentages or sources are invented.
+- Destructive tool execution requires an explicit `confirm` flag; non-owned inference servers are
+  never stopped.
+
+## API surface
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/health` | process liveness and runtime state |
+| `GET` | `/api/system/metrics` | CPU, RAM, GPU, disk samples |
+| `GET` | `/api/system/health` | per-component health |
+| `GET` | `/api/dashboard/overview` | initial dashboard state |
+| `GET` | `/api/models`, `/api/models/active` | model inventory and active model |
+| `GET` | `/api/agents`, `/api/agents/{id}` | agent registry |
+| `GET` | `/api/tasks`, `/api/tasks/{id}` | task history |
+| `GET` | `/api/activity` | persisted activity feed |
+| `GET` | `/api/tools` | registered tools |
+| `POST` | `/api/tools/{action}/execute` | controlled tool execution |
+| `POST` | `/api/chat` | one conversation turn |
+| `POST` | `/api/image/generate` | Qwen image generation |
+| `GET` | `/api/image/history`, `/api/image/file` | generated images (path-traversal guarded) |
+| `POST` | `/api/research` | opt-in web research |
+| `GET` | `/api/voice/state` | real voice pipeline state |
+| `GET` | `/api/knowledge/documents` | indexed documents |
+| `GET` | `/api/workspace` | project and workspace summary |
+| `WS` | `/ws/dashboard` | versioned live events (`v: 1`, monotonic `seq`) |
+
+Metrics poll over REST; events arrive over a single shared WebSocket with exponential-backoff
+reconnection. Activity is persisted to `data/dashboard/activity.json` (bounded to 500 entries).
+
+## Dashboard tests
+
+```powershell
+python -m pytest tests/test_web_dashboard.py -q
+
+cd frontend
+npx tsc --noEmit
+npx vitest run
+npm run build
+```
 
 ---
 
@@ -1049,7 +1153,8 @@ Speech recognition, reasoning, routing, memory, tools, and TTS should remain rep
 * [x] Local memory
 * [x] Tool registry
 * [x] Permission gate
-* [x] Desktop overlay
+* [x] Desktop overlay (tkinter status chip + generated-image viewer; opt-in `FRIDAY_OVERLAY=1`, optional pywin32 click-through)
+* [x] Local image generation (Qwen-Image-2.1 via stable-diffusion.cpp — `python -m friday.image setup` installs a verified runtime + models; real 512×512 PNG verified on this machine)
 * [x] Real-time audio pipeline
 * [x] Text mode
 * [ ] More Windows automation tools

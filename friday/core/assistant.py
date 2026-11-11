@@ -28,17 +28,201 @@ from friday.intent.normalizer import normalize
 from friday.reasoning.interface import Reasoner
 from friday.reasoning.local_reasoner import OllamaReasoner
 from friday.reasoning.llamacpp_reasoner import LlamaCppReasoner
+from friday.reasoning.nvidia_reasoner import NVIDIAReasoner
 from friday.reasoning.llamacpp_server import LlamaCppServerManager
 from friday.utils.logger import get_logger, close_logging
 from friday.utils.config_validator import validate_config
+from friday.utils.env_loader import load_dotenv
 from friday.rag.models import RAGConfig
 from friday.rag.service import RAGService
 
 
+def _build_llamacpp_reasoner(reasoning_cfg: dict) -> LlamaCppReasoner:
+    """Build the local Bonsai/llama.cpp reasoner from config."""
+    base_url = reasoning_cfg.get("endpoint") or "http://127.0.0.1:8080"
+    model = reasoning_cfg.get("model") or "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"
+    timeout = float(reasoning_cfg.get("timeout", 30))
+    return LlamaCppReasoner(base_url=base_url, model=model, timeout=timeout)
+
+
+class _FallbackReasoner(Reasoner):
+    """NVIDIA primary with a local Bonsai/llama.cpp safety net.
+
+    The hosted provider is preferred; if it is not configured, returns an
+    error response, raises, or streams an error chunk, the request is replayed
+    against the local model. Errors are logged by code only — never with the
+    API key.
+    """
+
+    def __init__(self, primary: Reasoner, fallback: Reasoner):
+        self.primary = primary
+        self.fallback = fallback
+        self.model = getattr(primary, "model", "")
+        self.base_url = getattr(primary, "base_url", None)
+        self.endpoint = self.base_url
+        self.provider = "nvidia"
+        self.last_provider = ""
+
+    def is_available(self) -> bool:
+        # A configured SDK client is enough to attempt the request; a failure
+        # is handled by the fallback inside request(). This avoids a network
+        # probe before every single turn.
+        if bool(getattr(self.primary, "configured", False)):
+            return True
+        try:
+            return bool(self.fallback.is_available())
+        except Exception:
+            return False
+
+    def health(self) -> str:
+        try:
+            primary_health = self.primary.health()
+        except Exception:
+            primary_health = "NVIDIA status unknown"
+        try:
+            fallback_health = self.fallback.health()
+        except Exception:
+            fallback_health = "local status unknown"
+        return f"{primary_health}; fallback: {fallback_health}"
+
+    def close(self) -> None:
+        for reasoner in (self.primary, self.fallback):
+            try:
+                reasoner.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _is_error(result) -> bool:
+        return not isinstance(result, dict) or result.get("type") == "error"
+
+    def request(
+        self,
+        transcript: str,
+        context,
+        mode: str = "action",
+        retrieval_context: str = "",
+    ) -> dict:
+        primary_error = None
+        try:
+            result = self.primary.request(
+                transcript, context, mode=mode, retrieval_context=retrieval_context
+            )
+        except Exception as exc:  # defensive: the provider maps its own errors
+            result = None
+            primary_error = str(exc)
+
+        if not self._is_error(result):
+            self.last_provider = "nvidia"
+            return result
+
+        if primary_error is None and isinstance(result, dict):
+            primary_error = str(result.get("error") or result.get("message") or "provider_error")
+        get_logger("friday").warning(
+            "[REASONER] NVIDIA unavailable (%s); falling back to local llama.cpp",
+            primary_error or "unknown",
+        )
+
+        try:
+            fallback_result = self.fallback.request(
+                transcript, context, mode=mode, retrieval_context=retrieval_context
+            )
+        except Exception as exc:
+            get_logger("friday").warning("[REASONER] Local fallback failed: %s", exc)
+            return {
+                "type": "error",
+                "error": "reasoning_unavailable",
+                "message": "Both NVIDIA and the local reasoner failed",
+                "provider": "nvidia+llamacpp",
+            }
+
+        if isinstance(fallback_result, dict):
+            fallback_result.setdefault("fallback_from", "nvidia")
+            if primary_error:
+                fallback_result.setdefault("primary_error", primary_error)
+            self.last_provider = "llamacpp"
+        return fallback_result
+
+    def request_stream(
+        self,
+        transcript: str,
+        context,
+        mode: str = "chat",
+        retrieval_context: str = "",
+    ):
+        primary_stream = getattr(self.primary, "request_stream", None)
+        if callable(primary_stream):
+            stream_error = ""
+            try:
+                stream = primary_stream(
+                    transcript, context, mode=mode, retrieval_context=retrieval_context
+                )
+                first = next(iter(stream))
+            except StopIteration:
+                return
+            except Exception as exc:  # never let a hosted failure kill the turn
+                stream_error = str(exc)
+                stream = iter(())
+                first = None
+
+            if not stream_error and not (
+                isinstance(first, str) and first.startswith("[error]")
+            ):
+                self.last_provider = "nvidia"
+                yield first
+                try:
+                    yield from stream
+                except Exception as exc:
+                    # Mid-stream failure: surface it instead of silently
+                    # truncating the reply. The next turn will fall back.
+                    get_logger("friday").warning(
+                        "[REASONER] NVIDIA stream aborted: %s", exc
+                    )
+                return
+            get_logger("friday").warning(
+                "[REASONER] NVIDIA stream failed (%s); falling back to local llama.cpp",
+                stream_error or "provider_error",
+            )
+            try:
+                yield from self._fallback_stream(
+                    transcript, context, mode, retrieval_context
+                )
+            except Exception as exc:
+                yield f"[error] local fallback failed: {exc}"
+            return
+
+        try:
+            yield from self._fallback_stream(transcript, context, mode, retrieval_context)
+        except Exception as exc:
+            yield f"[error] local fallback failed: {exc}"
+
+    def _fallback_stream(self, transcript, context, mode, retrieval_context):
+        fallback_stream = getattr(self.fallback, "request_stream", None)
+        if callable(fallback_stream):
+            self.last_provider = "llamacpp"
+            yield from fallback_stream(
+                transcript, context, mode=mode, retrieval_context=retrieval_context
+            )
+            return
+        result = self.fallback.request(
+            transcript, context, mode=mode, retrieval_context=retrieval_context
+        )
+        self.last_provider = "llamacpp"
+        if isinstance(result, dict) and result.get("type") == "response":
+            yield str(result.get("text") or "")
+        elif isinstance(result, dict) and result.get("type") == "clarification":
+            yield str(result.get("question") or "")
+
+
 def _build_reasoner(reasoning_cfg: dict) -> Reasoner:
-    """Construct the configured local reasoning provider.
+    """Construct the configured reasoning provider.
 
     Priority: FRIDAY_REASONING_PROVIDER env var > config.yaml reasoning.provider.
+    Supported providers: "ollama", "llamacpp", "nvidia".
+
+    For "nvidia" the hosted model is primary and the local llama.cpp model is
+    retained as a fallback. If no NVIDIA credentials are present the assistant
+    starts on the local model instead of failing at startup.
     """
     env_provider = os.environ.get("FRIDAY_REASONING_PROVIDER", "").strip().lower()
     provider = env_provider or reasoning_cfg.get("provider", "llamacpp")
@@ -48,10 +232,28 @@ def _build_reasoner(reasoning_cfg: dict) -> Reasoner:
         model = reasoning_cfg.get("model") or "llama3:latest"
         return OllamaReasoner(endpoint=endpoint, model=model)
 
-    base_url = reasoning_cfg.get("endpoint") or "http://127.0.0.1:8080"
-    model = reasoning_cfg.get("model") or "C:\\AI\\models\\Bonsai-8B-Q1_0.gguf"
-    timeout = float(reasoning_cfg.get("timeout", 30))
-    return LlamaCppReasoner(base_url=base_url, model=model, timeout=timeout)
+    if provider == "nvidia":
+        nvidia_cfg = reasoning_cfg.get("nvidia") or {}
+        timeout = float(
+            nvidia_cfg.get("timeout", reasoning_cfg.get("timeout", 30)) or 30
+        )
+        primary = NVIDIAReasoner(
+            model=nvidia_cfg.get("model"),
+            base_url=nvidia_cfg.get("base_url"),
+            timeout=timeout,
+        )
+        if not primary.configured:
+            get_logger("friday").warning(
+                "[REASONER] NVIDIA API key not configured; using local llama.cpp"
+            )
+            primary.close()
+            return _build_llamacpp_reasoner(reasoning_cfg)
+
+        if not bool(nvidia_cfg.get("fallback_to_local", True)):
+            return primary
+        return _FallbackReasoner(primary, _build_llamacpp_reasoner(reasoning_cfg))
+
+    return _build_llamacpp_reasoner(reasoning_cfg)
 
 
 # Pure TTS-cancellation utterances. When spoken while Friday is talking these
@@ -115,7 +317,17 @@ def _build_rag_service(rag_cfg: dict = None):
 
 
 class Friday:
-    def __init__(self, config_path: str = "config.yaml", text_mode: bool = False):
+    def __init__(
+        self,
+        config_path: str = "config.yaml",
+        text_mode: bool = False,
+        memory_service=None,
+        source: str = "voice",
+    ):
+        # Credentials live in .env, which Python does not read automatically.
+        # Load it before anything resolves provider/model settings.
+        load_dotenv()
+
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 raw_config = yaml.safe_load(f) or {}
@@ -149,11 +361,14 @@ class Friday:
 
         reasoning_cfg = self.config.get("reasoning", {})
         self.reasoner = _build_reasoner(reasoning_cfg)
-        provider = reasoning_cfg.get("provider", "llamacpp")
+        env_provider = os.environ.get("FRIDAY_REASONING_PROVIDER", "").strip().lower()
+        provider = env_provider or reasoning_cfg.get("provider", "llamacpp")
 
-        # Manage the llama.cpp server lifecycle when llamacpp provider is selected.
+        # Manage the llama.cpp server lifecycle whenever the local model is the
+        # provider *or* the fallback for the hosted NVIDIA provider.
         self.server_manager = None
-        if provider == "llamacpp":
+        needs_local_server = isinstance(self.reasoner, (LlamaCppReasoner, _FallbackReasoner))
+        if needs_local_server:
             server_cfg = reasoning_cfg.get("server", {})
             self.server_manager = LlamaCppServerManager(
                 base_url=reasoning_cfg.get("endpoint") or "http://127.0.0.1:8080",
@@ -172,10 +387,19 @@ class Friday:
                 self.logger.warning("[STARTUP] llama.cpp reasoning server unavailable")
                 self.logger.warning("[STARTUP] Deterministic commands remain operational")
 
+        # Let image generation borrow the reasoner's GPU VRAM: the manager runs
+        # this hook before a generation to stop the server, then restarts it.
+        from friday.image.gpu_hooks import clear_gpu_release_hooks, register_gpu_release_hook
+        clear_gpu_release_hooks()
+        if self.server_manager is not None:
+            register_gpu_release_hook(self._free_reasoner_gpu)
+
         self.logger.info(
             "[STARTUP] Reasoning provider: %s (model=%s endpoint=%s)",
             provider, self.reasoner.model, getattr(self.reasoner, "base_url", None) or getattr(self.reasoner, "endpoint", None),
         )
+        if isinstance(self.reasoner, _FallbackReasoner):
+            self.logger.info("[STARTUP] Local llama.cpp fallback enabled")
 
         self.conversation_manager = ConversationManager(
             dry_run=self._dry_run,
@@ -187,6 +411,8 @@ class Friday:
             research_agent=_build_research_agent(self.config.get("research", {})),
             natural_conversation_router=NaturalConversationRouter.from_config(self.config),
             system_commands_router=DeterministicSystemRouter.from_config(self.config),
+            on_progress=self._progress_speaker,
+            memory_service=self._build_memory_service(memory_service, source),
         )
         if getattr(self.conversation_manager, "rag_service", None):
             self.conversation_manager.rag_service.start_background_ingest()
@@ -222,6 +448,28 @@ class Friday:
             from friday.voice.async_session import AsyncVoiceSessionManager
             self.async_session = AsyncVoiceSessionManager(self.session_manager, self.tts)
 
+    def _build_memory_service(self, injected, source: str):
+        """Return caller-injected memory, or build one from config.
+
+        Memory is a best-effort side system: if construction fails the assistant
+        still starts and every recording hook becomes a no-op.
+        """
+        if injected is not None:
+            self.memory_service = injected
+            return injected
+        try:
+            from friday.memory import MemoryService
+
+            service = MemoryService.from_config(
+                self.config.get("memory", {}) or {}, source=source
+            )
+            self.memory_service = service
+            return service
+        except Exception as exc:
+            self.memory_service = None
+            self.logger.warning("[MEMORY] disabled: %s", exc)
+            return None
+
     def pause_listening(self):
         """Pause voice command processing without shutting down streams."""
         if self.conversation_manager.state != ConversationState.PAUSED:
@@ -249,6 +497,37 @@ class Friday:
         response, keep_running = self.conversation_manager.handle_transcript(transcript)
         self.logger.info("[ASSISTANT] Final response: %r", response)
         return response, keep_running
+
+    def _free_reasoner_gpu(self):
+        """Stop F.R.I.D.A.Y.'s own llama.cpp server so image generation can use
+        the GPU VRAM. Returns a callable that restarts it, or None when there is
+        no owned server to release."""
+        manager = self.server_manager
+        if manager is None or not manager.is_owned():
+            return None
+        self.logger.info("[GPU] Releasing reasoner VRAM for image generation")
+        manager.stop()
+
+        def _restore():
+            self.logger.info("[GPU] Restarting reasoner server")
+            try:
+                manager.start()
+            except Exception as e:
+                self.logger.warning("[GPU] reasoner restart failed: %s", e)
+
+        return _restore
+
+    def _progress_speaker(self, phrase: str) -> None:
+        """Speak an interleaved progress phrase (e.g. "Generating the image now.")
+        when voice mode is active. No-op in text mode (tts is None)."""
+        if "image" in phrase.lower():
+            from friday.ui.notify import emit_status_event
+            emit_status_event("GENERATING")
+        if self.tts is not None:
+            try:
+                self.tts.speak(phrase)
+            except Exception as e:
+                self.logger.error("[TTS] Progress phrase failed: %s", e)
 
     def _handle(self, transcript: str) -> bool:
         """
@@ -372,14 +651,9 @@ class Friday:
         wake_cfg = (self.config.get("wake_word") or "").strip().lower()
         if not wake_cfg or not text:
             return text
-        stripped = text.strip()
-        lowered = stripped.lower()
-        for prefix in (f"hey {wake_cfg}", wake_cfg):
-            if lowered == prefix:
-                return ""
-            if lowered.startswith(prefix) and stripped[len(prefix):len(prefix) + 1] in ("", " ", ",", "."):
-                return stripped[len(prefix):].lstrip(" ,.")
-        return text
+        from friday.voice.wake import WakeMatcher
+
+        return WakeMatcher(wake_cfg).strip_prefix(text)
 
     def _command_after_wake(self, wake_text: str) -> str:
         """
@@ -558,6 +832,11 @@ class Friday:
         if self.tts is not None:
             self.tts.stop()
         self.conversation_manager.stop_session()
+        if getattr(self, "memory_service", None) is not None:
+            try:
+                self.memory_service.close()
+            except Exception as exc:
+                self.logger.debug("[MEMORY] close failed: %s", exc)
         if self.session_manager is not None:
             self.session_manager.stop_session()
         if self.async_session is not None:

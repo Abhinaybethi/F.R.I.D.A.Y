@@ -3,6 +3,9 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.24.0
 faster-whisper>=1.0.0
+# Optional GPU acceleration for faster-whisper on NVIDIA GPUs (Windows/Linux):
+# nvidia-cublas-cu12>=12.4.5
+# nvidia-cudnn-cu12>=9.1.0
 kokoro-onnx>=0.1.0
 piper-tts>=1.2.0
 onnxruntime>=1.15.0
@@ -12,12 +15,23 @@ huggingface-hub>=0.23.0
 requests>=2.32.0
 ddgs>=8.1.0
 beautifulsoup4>=4.12.0
+feedparser>=6.0.0
+trafilatura>=2.0.0
 
 # System control
 psutil>=6.0.0
 
 # Config
 PyYAML>=6.0.2
+
+# Optional hosted reasoning (provider: "nvidia" in config.yaml/.env).
+# Installed lazily only when the NVIDIA provider is selected.
+openai>=1.0
+
+# Optional local dashboard (`python -m friday.web`)
+fastapi>=0.110
+uvicorn>=0.29
+websockets>=12.0
 
 # --- Optional: Windows-only voice-volume control ---
 # Uncomment these two lines if you're on Windows and want the

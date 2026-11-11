@@ -73,6 +73,70 @@ _PATTERNS: list[tuple[re.Pattern, callable]] = [
     (re.compile(r"^(?:close|quit|exit|kill|stop|terminate)\s+(?:the\s+)?(.+)$"),
      lambda m: (Action.CLOSE_APP, m.group(1), _HIGH)),
 
+    # 2.5 IMAGE_GENERATION — local Qwen-Image. "X of Y" patterns must precede
+    # SEARCH_WEB (3) and FIND_FILE (5) so "search/find an image of Y" lands here
+    # instead of on web/file search. Non-image searches still route normally.
+    (re.compile(r"^(?:generate|create|make|produce|draw|paint|capture)\s+(?:me\s+)?"
+                r"(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual|sketch|painting)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:search\s+(?:for\s+)?|find\s+)"
+                r"(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:give|show)\s+me\s+(?:an?|the)\s+"
+                r"(?:image|picture|photo|photograph|wallpaper|artwork|drawing|"
+                r"illustration|render|visual)\s+of\s+(.+)$",
+                re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    (re.compile(r"^(?:draw|paint|sketch)\s+(.+)$", re.IGNORECASE),
+     lambda m: (Action.IMAGE_GENERATION, m.group(1).strip().rstrip(".!?"), _HIGH)),
+
+    # 2.7 NEWS_SUMMARY — "news", "latest news", "today's news", "what's happening"
+    # Must precede SEARCH_WEB so "search for news" lands here.
+    # Pattern 1: "tell me the news", "what is the news", "what's the news", etc.
+    (re.compile(
+        r"^(?:tell\s+me\s+(?:the\s+)?|what(?:'?s|\s+is)\s+(?:the\s+)?)"
+        r"(?:latest|today'?s?|current|breaking|recent)?\s*news"
+        r"(?:\s+(?:in|from|about|on)\s+(.+))?$",
+        re.IGNORECASE),
+     lambda m: (Action.NEWS_SUMMARY, (m.group(1) or "").strip(), _HIGH)),
+
+    # Pattern 2: "what's happening", "what is happening", "what's up", "latest updates"
+    (re.compile(r"^(?:what'?s\s+(?:happening|going\s+on)|what(?:'?s|\s+is)\s+(?:happening|up|going\s+on)|"
+                r"latest\s+(?:updates?|headlines?)|news\s+briefing)"
+                r"(?:\s+(?:in|from|about|on)\s+(.+))?$",
+                re.IGNORECASE),
+     lambda m: (Action.NEWS_SUMMARY, (m.group(1) or "").strip(), _HIGH)),
+
+    # Pattern 3: bare "latest news", "breaking news", "today's news", "news" (with optional region)
+    (re.compile(
+        r"^(?:(?:today'?s?|latest|breaking|current|recent)\s+)?news"
+        r"(?:\s+(?:in|from|about|on)\s+(.+))?$",
+        re.IGNORECASE),
+     lambda m: (Action.NEWS_SUMMARY, (m.group(1) or "").strip(), _HIGH)),
+
+    # Pattern 4: "give me the news", "show me the news", "get the news"
+    (re.compile(
+        r"^(?:give|show|get)\s+me\s+(?:the\s+)?news"
+        r"(?:\s+(?:in|from|about|on)\s+(.+))?$",
+        re.IGNORECASE),
+     lambda m: (Action.NEWS_SUMMARY, (m.group(1) or "").strip(), _HIGH)),
+
+    # Pattern 5: "what is the news today", "what's the news today"
+    (re.compile(
+        r"^(?:what(?:'?s|\s+is)\s+(?:the\s+)?)news\s+(?:today|right\s+now)"
+        r"(?:\s+(?:in|from|about|on)\s+(.+))?$",
+        re.IGNORECASE),
+     lambda m: (Action.NEWS_SUMMARY, (m.group(1) or "").strip(), _HIGH)),
+
     # 3. SEARCH_WEB
     (re.compile(r"^(?:search(?:\s+(?:for|the web for|online for))?|"
                 r"look up|google|find online)\s+(.+)$"),
@@ -245,7 +309,7 @@ def route(raw_text: str) -> Intent:
             Action.SYSTEM_STOP, Action.SYSTEM_CANCEL, Action.SYSTEM_HELP, Action.SYSTEM_REPEAT,
             Action.RECALL, Action.FORGET, Action.READ_WEBSITE,
             Action.SET_VOLUME, Action.MUTE_AUDIO, Action.UNMUTE_AUDIO, Action.PAUSE_MEDIA,
-            Action.GREETING, Action.PLAY_VIDEO
+            Action.GREETING, Action.PLAY_VIDEO, Action.IMAGE_GENERATION, Action.NEWS_SUMMARY
         ):
             target_name, target_conf = target_raw, 1.0
             arguments = {}

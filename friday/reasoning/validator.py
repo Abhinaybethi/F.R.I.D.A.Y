@@ -21,6 +21,7 @@ _REASONER_SAFE_ACTIONS = {
     Action.FIND_FILE,
     Action.GET_TIME,
     Action.GREETING,
+    Action.IMAGE_GENERATION,
 }
 
 

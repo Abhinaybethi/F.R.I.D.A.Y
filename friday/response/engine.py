@@ -72,6 +72,11 @@ def format_spoken_response(outcome: Union[ActionOutcome, dict, str], is_dry_run:
         app_title = target.capitalize() if target else "the application"
         return f"Closing {app_title}."
 
+    elif action == Action.IMAGE_GENERATION:
+        if outcome.spoken_message:
+            return _clean_text(outcome.spoken_message)
+        return f"Generated an image of {target}." if target else "Generated the image."
+
     # Default clean output
     return _clean_text(outcome.user_message)
 

@@ -1,17 +1,20 @@
 """
 ROUTING — live web research must own current-information turns.
 
-Regression suite for the P-live fix: news / current-information queries that
-classify as UNKNOWN or COMMAND used to bypass the research subsystem and land
-on the reasoner's stale knowledge. These tests pin the new contract:
+Regression suite for the P-live fix: news / current-information queries must
+never be answered from the reasoner's stale knowledge. Explicit news requests
+are owned by the dedicated news skill (real headlines, grounded summary);
+other time-sensitive queries are owned by the research subsystem. This pins:
 
-  * research is evaluated on the *resolved* query before the bare reasoner,
-    regardless of the intent classifier's class;
+  * explicit "news" requests reach ``news_skill`` and never the bare reasoner;
+  * research is evaluated on the *resolved* query for current-information
+    turns, regardless of the intent classifier's class;
   * "how are you" still stays on the natural-conversation layer (no research,
     no reasoner);
   * static questions ("what is Node.js") stay on the local path;
-  * a time-sensitive query whose research fails returns an honest "live
-    sources unavailable" reply and is NEVER answered from the static model.
+  * a time-sensitive query whose data source fails returns an honest
+    "live sources unavailable" reply and is NEVER answered from the static
+    model.
 
 All providers are stubs — never the real network.
 """
@@ -22,6 +25,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import pytest
 
+from friday import news_skill
 from friday.core.conversation import ConversationManager
 from friday.research.models import (
     QueryType, ResearchResponse, SearchFailure, SearchResult,
@@ -93,19 +97,53 @@ def _manager(research=None, reasoner=None):
     return cm
 
 
+def _patch_news(monkeypatch, spoken="Grounded headline summary.", fetch_ok=True):
+    """Stub the news skill so routing tests never touch the network or the LLM."""
+    calls = []
+
+    def fake_summarize(llm_client=None, limit=8, hindi=False, region=None):
+        calls.append({"limit": limit, "hindi": hindi, "region": region})
+        if not fetch_ok:
+            return "I couldn't retrieve live news right now. feed down", None
+        return spoken, [{"title": "Headline", "source": "Test"}]
+
+    monkeypatch.setattr(news_skill, "summarize_headlines", fake_summarize)
+    return calls
+
+
 # ---------------------------------------------------------------------------
-# News / current-information turns own the research gate
+# Explicit news requests are owned by the dedicated news skill
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("utterance", [
     "can you tell me the latest news?",
+    "latest news about India",
+    "give me the news",
+])
+def test_news_queries_reach_news_skill_not_research_or_reasoner(monkeypatch, utterance):
+    calls = _patch_news(monkeypatch, spoken="Grounded headline summary.")
+    research = RecordingResearch()
+    reasoner = RecordingReasoner()
+    cm = _manager(research=research, reasoner=reasoner)
+    reply, sent = cm.handle_transcript(utterance)
+    assert sent is True
+    assert calls, f"news skill must handle {utterance!r}"
+    assert research.seen == [], "news requests skip live research"
+    assert reasoner.requests == [], "news requests never reach the bare reasoner"
+    assert "Grounded headline summary." in reply
+
+
+# ---------------------------------------------------------------------------
+# Non-news current-information turns still own the research gate
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("utterance", [
     "check further latest information about news, such were news articles, "
     "yesterday or today.",
-    "latest news about India",
     "what is happening today?",
     "what happened yesterday",
 ])
-def test_news_queries_reach_research_not_reasoner(utterance):
+def test_time_sensitive_queries_reach_research_not_reasoner(utterance):
     research = RecordingResearch()
     reasoner = RecordingReasoner()
     cm = _manager(research=research, reasoner=reasoner)
@@ -120,7 +158,7 @@ def test_unknown_class_query_reaches_research():
     research = RecordingResearch()
     reasoner = RecordingReasoner()
     cm = _manager(research=research, reasoner=reasoner)
-    reply, sent = cm.handle_transcript("can you tell me the latest news?")
+    reply, sent = cm.handle_transcript("what happened yesterday")
     assert sent is True
     assert research.seen
     assert reasoner.requests == []
@@ -142,13 +180,14 @@ def test_command_classed_conditional_news_reaches_research():
     assert "I checked current sources" in reply
 
 
-def test_followup_resolves_before_research():
+def test_news_followup_resolves_regional_context_before_research(monkeypatch):
+    _patch_news(monkeypatch)
     research = RecordingResearch()
     reasoner = RecordingReasoner()
     cm = _manager(research=research, reasoner=reasoner)
     cm.handle_transcript("latest news about India")
     cm.handle_transcript("what about yesterday?")
-    assert len(research.seen) == 2
+    assert len(research.seen) == 1
     assert "India" in research.seen[-1]  # resolved query, not the raw ellipsis
 
 
@@ -178,21 +217,24 @@ def test_static_knowledge_stays_local_with_research_enabled():
     assert reasoner.requests, "factual questions stay on the local path"
 
 
-def test_research_disabled_keeps_news_on_old_pipeline():
+def test_news_still_handled_when_research_disabled(monkeypatch):
+    calls = _patch_news(monkeypatch, spoken="Grounded headline summary.")
     reasoner = RecordingReasoner()
     cm = _manager(research=None, reasoner=reasoner)
     reply, sent = cm.handle_transcript("can you tell me the latest news?")
     assert sent is True
-    assert reasoner.requests  # no research gate: falls through as before
-    assert reply
+    assert calls, "news skill owns the turn even without the research subsystem"
+    assert reasoner.requests == [], "reasoner must not answer news from stale knowledge"
+    assert "Grounded headline summary." in reply
 
 
 # ---------------------------------------------------------------------------
 # Bounded fallback
 # ---------------------------------------------------------------------------
 
-def test_news_research_failure_blocks_static_reasoner():
-    research = RecordingResearch(fail=True)
+def test_news_fetch_failure_is_honest_and_blocks_static_reasoner(monkeypatch):
+    _patch_news(monkeypatch, fetch_ok=False)
+    research = RecordingResearch()
     reasoner = RecordingReasoner()
     cm = _manager(research=research, reasoner=reasoner)
     reply, sent = cm.handle_transcript("can you tell me the latest news?")
