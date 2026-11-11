@@ -8,8 +8,8 @@ security:
   allow_real_execution: true
 
 tools:
-  dry_run: false        # Backward compatibility key
-  allow_real_execution: true
+  dry_run: false        # dry-run mode: True = no real execution, False = attempt real
+  allow_real_execution: true   # allow real execution: True = enable, False = disabled
   permissions:
     open_app: true
     close_app: true
@@ -70,6 +70,14 @@ image:
 voice:
   offline_only: true
   wake_word_required: true   # true = wake-gated (IDLE ignores non-wake speech); false = hands-free
+  hands_free:                # always-on wake-word listening for the dashboard voice console
+    enabled: true
+    wake_word: "friday"
+    acknowledgement: ["Yes Abhi", "Yes boss"]   # spoken reply after a bare wake; false disables
+    silence_ms: 800          # end-of-utterance silence before a segment is transcribed
+    command_timeout_seconds: 12   # how long to wait for a command after "hey friday"
+    session_timeout_seconds: 300  # inactivity timeout for an active conversation session
+    flush_timeout_seconds: 2.5    # pause length that closes a multi-question utterance before one combined answer
   conversation_timeout_seconds: 300   # active-session inactivity timeout (180–300s); wake required again after expiry
   debug:
     save_audio: false
@@ -82,8 +90,8 @@ voice:
   stt:
     engine: "faster-whisper"
     model: "small.en"
-    device: "cpu"
-    compute_type: "int8"
+    device: "auto"              # auto = CUDA on NVIDIA GPUs, otherwise CPU int8
+    compute_type: "int8"        # overridden to float16 on CUDA
     language: "en"
   tts:
     engine: "piper"
@@ -106,7 +114,23 @@ brain:
   ollama_model: "llama3:latest"
 
 reasoning:
-  provider: "llamacpp"
+  # Reasoning provider selection.
+  # Supported: "ollama" (local Ollama), "llamacpp" (llama.cpp / Bonsai),
+  #   "nvidia" (NVIDIA API Catalog — hosted, requires NVIDIA_API_KEY env var).
+  # Default is "llamacpp" for backwards compatibility.
+  provider: "nvidia"
+
+  # NVIDIA‑specific overrides (only used when provider = "nvidia").
+  # These are typically set via environment variables
+  #   NVIDIA_API_KEY, NVIDIA_BASE_URL, NVIDIA_MODEL.
+  # Config.yaml values are ignored when provider is "nvidia".
+  nvidia:
+    model: "nvidia/nemotron-3.5-bolt-e4b"       # overridden by NVIDIA_MODEL env var
+    base_url: "https://integrate.api.nvidia.com/v1"  # overridden by NVIDIA_BASE_URL env var
+    timeout: 30                        # request timeout in seconds
+
+  # Legacy direct fields (still supported for backwards compat;
+  # take priority over nvidia.* sub‑block when provider is not "nvidia").
   model: 'C:\AI\models\Bonsai-8B-Q1_0.gguf'
   endpoint: "http://127.0.0.1:8080"
   timeout: 30
@@ -151,6 +175,22 @@ natural_conversation:
 # out of the reasoner. See friday/core/system_commands.py for scope.
 system_commands:
   enabled: true                 # FRIDAY_SYSTEM_COMMANDS_ENABLED overrides
+
+# Persistent conversation / task memory (Phase 2). Local SQLite + optional
+# ChromaDB semantic index. `enabled: false` makes every memory hook a no-op.
+memory:
+  enabled: true
+  db_path: ".data/memory.db"            # raw history, episodes, facts, tasks
+  vector_enabled: true                  # semantic ("meaning") search via Chroma
+  vector_path: ".data/rag/conversations"
+  vector_collection: "conversation_memory"
+  summaries_enabled: true
+  summary_min_turns: 4                  # turns before a session summary is generated
+  retention_days: 0                     # 0 = keep forever (explicit prune only)
+  max_turns_per_session: 0              # 0 = unlimited
+  dedupe_window_seconds: 3.0            # absorbs retry/reconnect duplicates
+  search_limit: 20
+  backup_dir: ".data/backups"
 
 logging:
   level: "INFO"

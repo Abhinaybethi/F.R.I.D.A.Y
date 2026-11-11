@@ -27,6 +27,10 @@ from friday.web.events import bus, event_types, install_notify_bridge, make_even
 from friday.web.metrics import prime_cpu
 from friday.web.routes import install_error_handler, router
 from friday.web.runtime import get_runtime
+from friday.utils.env_loader import load_dotenv
+
+# Ensure provider credentials exist before the lazy runtime constructs Friday.
+load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIST = Path(os.environ.get("FRIDAY_FRONTEND_DIST") or (REPO_ROOT / "frontend" / "dist"))
@@ -90,6 +94,18 @@ async def lifespan(app: FastAPI):
     runtime = get_runtime()
     app.state.runtime = runtime
     heartbeat = asyncio.create_task(_heartbeat(), name="dashboard-heartbeat")
+    # Auto-start hands-free wake-word listening when it is enabled in config so
+    # the assistant can be woken without opening the dashboard first.
+    try:
+        enabled, _opts = runtime._handsfree_settings()
+    except Exception:
+        enabled = False
+    if enabled:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, runtime.start_handsfree)
+        except Exception as exc:  # pragma: no cover - best effort
+            import logging
+            logging.getLogger(__name__).warning("hands-free auto-start failed: %s", exc)
     try:
         yield
     finally:

@@ -178,6 +178,15 @@ export interface ChatResponse {
   timestamp: string;
 }
 
+export interface HandsFreeState {
+  enabled: boolean;
+  active: boolean;
+  state: string;
+  wake_word: string;
+  error: string;
+  heard: string;
+}
+
 export interface VoiceState {
   state: string;
   capture_active: boolean;
@@ -185,6 +194,10 @@ export interface VoiceState {
   pipeline: string[];
   capture_supported: boolean;
   reason: string;
+  hands_free?: HandsFreeState;
+  hands_free_active?: boolean;
+  hands_free_state?: string;
+  wake_word?: string;
 }
 
 export interface ImageResult {
@@ -311,6 +324,20 @@ export interface SettingsResponse {
   };
   research: { enabled?: boolean; provider?: string; max_results?: number };
   monitoring: { refresh_interval_ms: number };
+  memory: {
+    enabled: boolean;
+    db_path: string;
+    vector_enabled: boolean;
+    vector_path: string;
+    vector_collection: string;
+    summaries_enabled: boolean;
+    summary_min_turns: number;
+    retention_days: number;
+    max_turns_per_session: number;
+    dedupe_window_seconds: number;
+    search_limit: number;
+    backup_dir: string;
+  };
 }
 
 export interface Overview {

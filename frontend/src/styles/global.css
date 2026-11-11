@@ -1349,6 +1349,73 @@ select {
   margin-bottom: 2px;
 }
 
+/* ---------------------------------------------------------------- holographic sphere */
+.holographic-sphere {
+  width: var(--sphere-size, 128px);
+  height: var(--sphere-size, 128px);
+  margin: 6px auto;
+  position: relative;
+  z-index: 100; /* Ensure it overlays other UI elements */
+  pointer-events: none; /* Don't intercept mouse events */
+}
+
+.holographic-sphere canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+/* When voice is active, make the sphere more prominent */
+.voice-orb[data-active="true"] + .holographic-sphere,
+.holographic-sphere[style*="visible"] {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 30px -12px rgba(56, 189, 248, 0.4); }
+  50% { box-shadow: 0 0 50px -12px rgba(56, 189, 248, 0.6), 0 0 80px -16px rgba(56, 189, 248, 0.5); }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .holographic-sphere {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------- misc */
+.voice-orb {
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin: 6px auto;
+  position: relative;
+  background: radial-gradient(circle at 50% 42%, rgba(34, 211, 238, 0.22), rgba(9, 14, 26, 0.9) 70%);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: var(--electric);
+  box-shadow: 0 0 40px -12px rgba(56, 189, 248, 0.45), inset 0 0 30px -14px rgba(56, 189, 248, 0.8);
+}
+.voice-orb::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 1px solid rgba(139, 92, 246, 0.16);
+}
+.voice-orb[data-active="true"] {
+  border-color: rgba(52, 211, 153, 0.5);
+  box-shadow: 0 0 46px -8px rgba(52, 211, 153, 0.4);
+}
+.voice-orb .state {
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
 /* ---------------------------------------------------------------- voice */
 .voice-orb {
   width: 128px;
@@ -1708,5 +1775,251 @@ table.data tr:hover td {
   }
   table.data {
     font-size: 0.74rem;
+  }
+}
+
+/* Holographic sphere visual state */
+.voice-interaction-active .holographic-sphere {
+  opacity: 1;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.voice-interaction-active .holographic-sphere canvas {
+  animation-play-state: running;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 30px -12px rgba(56, 189, 248, 0.4); }
+  50% { box-shadow: 0 0 50px -12px rgba(56, 189, 248, 0.6), 0 0 80px -16px rgba(56, 189, 248, 0.5); }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .holographic-sphere {
+    transition: opacity 0.01s;
+  }
+  .voice-interaction-active .holographic-sphere {
+    animation: none;
+    animation-play-state: paused;
+  }
+}
+
+/* ---------------------------------------------------------------- voice hologram overlay */
+/*
+ * The hologram is an overlay, not an inline page element: it only exists while
+ * voice is engaged and wakes up over whatever page the user is on.
+ *
+ * Visual reference: floating gold neural hologram — a brain of glowing
+ * neurons wired with curved synapses, canted electron shells, a white-hot
+ * nucleus, data fragments, bloom and floor reflection.
+ * The local backdrop and floor keep the reference's dark sci-fi contrast while
+ * remaining transparent enough to work as an overlay.
+ */
+.voice-hologram-overlay {
+  /* Palette mirrors the hologram's gold theme (see THEMES.gold). */
+  --holo-core: 255, 140, 20;
+  --holo-bright: 255, 201, 74;
+  --holo-soft: 255, 231, 168;
+  --holo-deep: 210, 105, 8;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  pointer-events: none;
+  animation: hologram-wake 420ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.voice-hologram-overlay[data-leaving="true"] {
+  animation: hologram-sleep 380ms ease-in forwards;
+}
+
+/* Dark radial pool behind the orb so the gold lines read like the reference. */
+.voice-hologram-backdrop {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 56% 62% at 50% 48%,
+    rgba(5, 3, 2, 0.78),
+    rgba(3, 2, 1, 0.44) 50%,
+    rgba(2, 1, 0, 0.14) 68%,
+    transparent 78%
+  );
+  pointer-events: none;
+}
+
+.voice-hologram-glow {
+  position: absolute;
+  width: min(1080px, 116vmin);
+  height: min(1080px, 116vmin);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 48%,
+    rgba(var(--holo-soft), 0.2),
+    rgba(var(--holo-core), 0.16) 22%,
+    rgba(var(--holo-deep), 0.08) 46%,
+    transparent 68%
+  );
+  filter: blur(36px);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: hologram-halo 5s ease-in-out infinite;
+}
+
+.voice-hologram-scene {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  /* Mirror the lower part of the orb onto the "floor" below. */
+  -webkit-box-reflect: below 12px
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.2) 26%, transparent 52%);
+  transform: translateY(-2%);
+}
+
+.voice-hologram-overlay .holographic-sphere {
+  /* Override the inline prop so the orb dominates the overlay on any viewport. */
+  --sphere-size: min(800px, 88vh) !important;
+  margin: 0;
+  animation: hologram-float 4.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 34px rgba(var(--holo-core), 0.6))
+    drop-shadow(0 0 96px rgba(var(--holo-deep), 0.44));
+}
+
+/* Soft pool of warm light where the reflection meets the floor. */
+.voice-hologram-floor {
+  position: absolute;
+  top: calc(50% + min(280px, 30vh));
+  z-index: 2;
+  width: min(780px, 88vmin);
+  height: min(200px, 22vh);
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at 50% 40%,
+    rgba(var(--holo-core), 0.32),
+    rgba(var(--holo-deep), 0.14) 40%,
+    transparent 70%
+  );
+  filter: blur(28px);
+  opacity: 0.97;
+  pointer-events: none;
+}
+
+.voice-hologram-floor::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  top: 48%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(var(--holo-soft), 0.34),
+    transparent
+  );
+  filter: blur(0.6px);
+}
+
+.voice-hologram-label {
+  position: absolute;
+  bottom: 2.5%;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  font-size: 0.62rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: #ffe6ae;
+  text-shadow: 0 0 16px rgba(var(--holo-core), 0.85),
+    0 0 36px rgba(var(--holo-deep), 0.5);
+}
+
+@keyframes hologram-wake {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes hologram-sleep {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes hologram-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes hologram-halo {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+@media (max-width: 720px) {
+  .voice-hologram-overlay .holographic-sphere {
+    --sphere-size: min(460px, 88vmin) !important;
+  }
+  .voice-hologram-floor {
+    top: calc(50% + min(200px, 26vh));
+    width: 92vmin;
+  }
+  .voice-hologram-label {
+    bottom: 6%;
+    font-size: 0.6rem;
+    letter-spacing: 0.22em;
+  }
+}
+
+@media (max-height: 620px) {
+  .voice-hologram-overlay .holographic-sphere {
+    --sphere-size: min(560px, 82vh) !important;
+  }
+  .voice-hologram-floor {
+    top: calc(50% + min(230px, 38vh));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-hologram-overlay {
+    animation-duration: 1ms;
+  }
+  .voice-hologram-overlay[data-leaving="true"] {
+    animation-duration: 1ms;
+  }
+  .voice-hologram-overlay .holographic-sphere {
+    animation: none;
+  }
+  .voice-hologram-glow {
+    animation: none;
   }
 }

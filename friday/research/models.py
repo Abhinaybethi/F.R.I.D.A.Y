@@ -45,6 +45,7 @@ class SearchResult:
     source: str = ""
     published_at: Optional[datetime] = None
     rank: int = 0
+    _boost: float = 0.0  # internal relevance boost from freshness heuristics
 
     def __post_init__(self):
         self.published_at = _utc_aware(self.published_at)

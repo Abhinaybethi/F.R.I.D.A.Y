@@ -16,11 +16,22 @@ export function VoicePage() {
           <span className="eyebrow">Voice</span>
           <h1>Voice console</h1>
           <p>
-            The desktop voice runtime owns microphone capture. This console reports its real conversation
-            state and transcript, and provides typed input through the same assistant pipeline.
+            Hands-free is on: just say <strong>“Hey Friday”</strong> and ask your question. The machine
+            microphone is always listening for the wake word, audio is transcribed locally by
+            faster-whisper, and replies are spoken aloud — nothing is sent to a cloud service. You can
+            still record a single turn from the browser or type below.
           </p>
         </div>
-        <StatusPill status={voice?.capture_active ? "running" : "idle"} label={voice?.capture_active ? "Capturing" : "Capture idle"} />
+        <StatusPill
+          status={voice?.microphone.available ? "idle" : "unavailable"}
+          label={
+            voice?.hands_free?.active
+              ? `Listening for “Hey ${voice.hands_free.wake_word}”`
+              : voice?.microphone.available
+                ? "Microphone ready"
+                : "No microphone"
+          }
+        />
       </div>
 
       <div className="grid grid-2">
@@ -28,7 +39,7 @@ export function VoicePage() {
           <div className="panel-head">
             <div>
               <h2 id="voice-control">Interaction</h2>
-              <p className="panel-sub">No competing microphone pipeline is opened by the dashboard</p>
+              <p className="panel-sub">Wake word → local transcription → local model → spoken reply</p>
             </div>
           </div>
           <div className="panel-body">
@@ -81,8 +92,9 @@ export function VoicePage() {
             </div>
           </div>
           <p className="tiny muted" style={{ marginTop: 12 }}>
-            Speech playback is performed by the desktop runtime. The dashboard does not expose a “speaking”
-            claim unless the backend reports that pipeline state.
+            Wake-word detection, transcription, and speech synthesis run locally in the F.R.I.D.A.Y.
+            backend; the dashboard only reflects state. Hands-free replies play on this machine's default
+            output, so they are not also played in the browser.
           </p>
         </div>
       </section>

@@ -12,25 +12,45 @@ Usage:
     python main.py --logs
     python main.py --download-models
 """
+import os
 import sys
 import json
 import argparse
 from friday import __version__
 from friday.utils.logger import get_logger
 from friday.utils.config_validator import validate_config
+from friday.utils.env_loader import load_dotenv
+
+# Load .env before any provider/credential resolution. Existing environment
+# variables win, so CI/shell overrides still take precedence.
+load_dotenv()
 
 logger = get_logger(__name__)
 
 
 def _make_reasoner(reasoning_cfg: dict):
-    """Build the configured local reasoning provider (ollama or llamacpp)."""
-    provider = reasoning_cfg.get("provider", "llamacpp")
+    """Build the configured reasoning provider (ollama, llamacpp, or nvidia)."""
+    # Priority: env var > config.yaml provider
+    env_provider = os.environ.get("FRIDAY_REASONING_PROVIDER", "").strip().lower()
+    provider = env_provider or reasoning_cfg.get("provider", "llamacpp")
     if provider == "ollama":
         from friday.reasoning.local_reasoner import OllamaReasoner
         return OllamaReasoner(
             endpoint=reasoning_cfg.get("endpoint", "http://localhost:11434/api/generate"),
             model=reasoning_cfg.get("model", "llama3:latest"),
         )
+    if provider == "nvidia":
+        from friday.reasoning.nvidia_reasoner import NVIDIAReasoner
+        nvidia_cfg = reasoning_cfg.get("nvidia") or {}
+        reasoner = NVIDIAReasoner(
+            model=nvidia_cfg.get("model"),
+            base_url=nvidia_cfg.get("base_url"),
+            timeout=float(nvidia_cfg.get("timeout", reasoning_cfg.get("timeout", 30)) or 30),
+        )
+        if reasoner.configured:
+            return reasoner
+        reasoner.close()
+        logger.warning("[REASONER] NVIDIA API key not configured; using local llama.cpp")
     from friday.reasoning.llamacpp_reasoner import LlamaCppReasoner
     return LlamaCppReasoner(
         base_url=reasoning_cfg.get("endpoint", "http://127.0.0.1:8080"),
@@ -106,9 +126,9 @@ def run_diagnostics(as_json: bool = False):
         "tts": "ok",
         "reasoning": "ok",
         "security": {
-            "dry_run": True,
-            "allow_real_execution": False
-        }
+            "dry_run": None,
+            "allow_real_execution": None,
+        },
     }
 
     status_ok = True
@@ -118,9 +138,14 @@ def run_diagnostics(as_json: bool = False):
         import yaml
         with open("config.yaml", "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        valid, errs, _ = validate_config(cfg)
+        valid, cfg, messages = validate_config(cfg)
+        tools = cfg.get("tools", {}) or {}
+        diag_data["security"] = {
+            "dry_run": bool(tools.get("dry_run", True)),
+            "allow_real_execution": bool(tools.get("allow_real_execution", False)),
+        }
         if not valid:
-            diag_data["config"] = f"fail ({errs[0]})"
+            diag_data["config"] = f"fail ({messages[0] if messages else 'invalid config'})"
             status_ok = False
     except Exception as e:
         diag_data["config"] = f"fail ({e})"
@@ -201,8 +226,11 @@ def run_diagnostics(as_json: bool = False):
         print(f"Reasoning    [{'OK' if diag_data['reasoning'] == 'ok' else 'FAIL'}]")
         print("Tools        [OK]")
         print("\nSecurity Policy:")
-        print("dry_run              [LOCKED: True]")
-        print("allow_real_execution [LOCKED: False]")
+        security = diag_data.get("security") or {}
+        dry_run = security.get("dry_run")
+        allow_real = security.get("allow_real_execution")
+        print(f"dry_run              [{'unknown' if dry_run is None else dry_run}]")
+        print(f"allow_real_execution [{'unknown' if allow_real is None else allow_real}]")
         print("=" * 45)
 
     return status_ok

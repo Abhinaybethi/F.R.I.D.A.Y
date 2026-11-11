@@ -145,6 +145,8 @@ def event_types() -> List[str]:
         "model.changed",
         "model.unavailable",
         "voice.state",
+        "voice.transcribed",
+        "voice.handsfree",
         "transcript.updated",
         "research.started",
         "research.completed",
@@ -153,4 +155,8 @@ def event_types() -> List[str]:
         "image.failed",
         "automation.updated",
         "status.updated",
+        # Generic failure channel. Declared in the contract so clients can
+        # filter a schema-level error without guessing at an undeclared type;
+        # domain-specific failures still use task.failed/image.failed/etc.
+        "error",
     ]

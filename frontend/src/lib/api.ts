@@ -3,6 +3,7 @@
 import type {
   AgentInfo,
   ChatResponse,
+  HandsFreeState,
   ImageHistoryItem,
   ImageResult,
   KnowledgeResponse,
@@ -47,10 +48,11 @@ interface RequestOptions {
   body?: unknown;
   timeoutMs?: number;
   signal?: AbortSignal;
+  params?: Record<string, string | number | boolean | undefined>;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, timeoutMs = 20_000, signal } = options;
+  const { method = "GET", body, timeoutMs = 20_000, signal, params } = options;
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
 
@@ -62,7 +64,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   try {
-    const response = await fetch(`${BASE}${path}`, {
+    const suffix = params ? query(params) : "";
+    const response = await fetch(`${BASE}${path}${suffix}`, {
       method,
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -186,6 +189,84 @@ export const api = {
 
   voiceState: () => request<VoiceState>("/api/voice/state"),
 
+  transcribeAudio: async (wav: Blob): Promise<{
+    text: string;
+    duration_seconds: number;
+    rtf: number;
+    device?: string;
+    model?: string;
+  }> => {
+    const response = await fetch(`${BASE}/api/voice/transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: wav,
+      cache: "no-store",
+    });
+    const text = await response.text();
+    let payload: unknown;
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = text;
+      }
+    }
+    if (!response.ok) {
+      const envelope = payload as { error?: { type?: string; message?: string } } | undefined;
+      throw new ApiError(
+        envelope?.error?.message ?? `Transcription failed with HTTP ${response.status}`,
+        envelope?.error?.type ?? "http_error",
+        response.status,
+      );
+    }
+    return payload as { text: string; duration_seconds: number; rtf: number; device?: string; model?: string };
+  },
+
+  speak: async (text: string): Promise<Blob> => {
+    const response = await fetch(`${BASE}/api/voice/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const raw = await response.text();
+      let message = `Speech synthesis failed with HTTP ${response.status}`;
+      try {
+        const envelope = JSON.parse(raw) as { error?: { message?: string } };
+        message = envelope?.error?.message ?? message;
+      } catch {
+        /* keep default message */
+      }
+      throw new ApiError(message, "tts_failed", response.status);
+    }
+    return response.blob();
+  },
+
+  startCapture: () =>
+    request<{ recording: boolean; sample_rate: number; device: string }>(
+      "/api/voice/capture/start",
+      { method: "POST", timeoutMs: 30_000 },
+    ),
+
+  stopCapture: () =>
+    request<{ text: string; duration_seconds: number; rtf: number; device?: string; model?: string }>(
+      "/api/voice/capture/stop",
+      { method: "POST", timeoutMs: 240_000 },
+    ),
+
+  startHandsFree: () =>
+    request<HandsFreeState>("/api/voice/wake/start", {
+      method: "POST",
+      timeoutMs: 30_000,
+    }),
+
+  stopHandsFree: () =>
+    request<HandsFreeState>("/api/voice/wake/stop", {
+      method: "POST",
+      timeoutMs: 15_000,
+    }),
+
   generateImage: (payload: {
     prompt: string;
     width?: number;
@@ -221,4 +302,42 @@ export const api = {
   workspace: () => request<WorkspaceResponse>("/api/workspace"),
 
   settings: () => request<SettingsResponse>("/api/settings"),
+  memoryStats: () => request<{ stats: any; health: any; settings: any }>("/api/memory/stats"),
+  memorySessions: (params?: { source?: string; from_ts?: string; to_ts?: string }) =>
+    request("/api/memory/sessions", { params, timeoutMs: 30_000 }),
+  memorySearch: (
+    queryText: string,
+    mode?: string,
+    params?: { from_ts?: string; to_ts?: string; topic?: string; session_id?: string; source?: string; limit?: number },
+  ) =>
+    request("/api/memory/search" + query({ q: queryText, mode, ...params }), { timeoutMs: 30_000 }),
+  memoryFacts: (params?: { q?: string; category?: string; include_deleted?: boolean; limit?: number; offset?: number }) =>
+    request("/api/memory/facts", { params, timeoutMs: 30_000 }),
+  memoryTasks: (params?: { state?: string; limit?: number; offset?: number }) =>
+    request("/api/memory/tasks", { params, timeoutMs: 30_000 }),
+  memoryPrune: (body: { dry_run?: boolean; retention_days?: number }) =>
+    request<{ enabled: boolean; dry_run: boolean; deleted: number; session_ids: string[]; retention_days: number; cutoff: string }>("/api/memory/prune", { method: "POST", body, timeoutMs: 30_000 }),
+  memoryBackup: () => request<{ backup: string; integrity: string }>("/api/memory/backup", { method: "POST", timeoutMs: 30_000 }),
+  /**
+   * Search F.R.I.D.A.Y's stored knowledge/memory and normalise the hits into
+   * `{ id, text, model }` rows for the dashboard UI.
+   */
+  search: async (
+    queryText: string,
+    params?: { mode?: string; topic?: string; source?: string; limit?: number },
+  ): Promise<Array<{ id: string; text: string; model: string }>> => {
+    const payload = await request<{ results?: Array<Record<string, unknown>> }>(
+      "/api/memory/search" + query({ q: queryText, ...params }),
+      { timeoutMs: 30_000 },
+    );
+    const rows = Array.isArray(payload?.results) ? payload.results : [];
+    return rows.map((row, index) => {
+      const session = row.session as { source?: string; title?: string } | undefined;
+      return {
+        id: String(row.id ?? index),
+        text: String(row.raw_text ?? row.response_text ?? row.text ?? ""),
+        model: String(row.match ?? session?.source ?? session?.title ?? "memory"),
+      };
+    });
+  },
 };

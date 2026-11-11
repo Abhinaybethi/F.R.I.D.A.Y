@@ -20,6 +20,12 @@ _NEWSY = re.compile(
 )
 
 
+def _freshness_boost(item: dict) -> float:
+    """Return a small relevance boost (0.0–1.0) if the item looks fresh."""
+    text = (item.get("title") or "") + " " + (item.get("body") or "")
+    return 0.3 if _NEWSY.search(text) else 0.0
+
+
 def _load_ddgs_client():
     """Import the DuckDuckGo client, trying modern then legacy package names."""
     try:
@@ -114,6 +120,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
             snippet = (item.get("body") or item.get("snippet") or "").strip()
             if not url:
                 continue
+            boost = _freshness_boost(item)
             results.append(SearchResult(
                 title=title,
                 url=url,
@@ -122,6 +129,9 @@ class DuckDuckGoSearchProvider(SearchProvider):
                 published_at=_render_datetime(item.get("date")),
                 rank=idx,
             ))
+        # Sort by freshness boost (desc) then by rank (asc) so fresh results rise,
+        # but keep stable order when boost is equal.
+        results.sort(key=lambda r: (-r._boost if hasattr(r, "_boost") else 0, r.rank))  # type: ignore[attr-defined]
         return results
 
 

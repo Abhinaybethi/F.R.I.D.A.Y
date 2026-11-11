@@ -8,6 +8,7 @@ derived from configuration and live probes, never from sample data.
 """
 import dataclasses
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -21,6 +22,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from friday.utils.config_validator import validate_config
+from friday.utils.logger import get_logger
+from friday.voice.audio_hub import get_audio_hub
 from friday.web.activity import (
     KIND_CHAT,
     KIND_IMAGE,
@@ -35,6 +38,8 @@ from friday.web.metrics import prime_cpu, system_metrics
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_ACTIVITY_PATH = "data/dashboard/activity.json"
+
+logger = get_logger(__name__)
 
 
 def _jsonable(value: Any) -> Any:
@@ -54,9 +59,13 @@ def _truncate(text: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _http_probe(url: str, timeout: float = 2.0) -> Dict[str, Any]:
+def _http_probe(
+    url: str,
+    timeout: float = 2.0,
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method="GET", headers=headers or {})
         with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read(65536).decode("utf-8", "replace")
             status = getattr(response, "status", 200)
@@ -93,8 +102,23 @@ class DashboardRuntime:
         self._chat_lock = threading.Lock()
         self._assistant = None
         self._assistant_error = ""
+        self._stt = None
+        self._stt_error = ""
+        self._tts = None
+        self._tts_error = ""
+        self._capture_lock = threading.Lock()
+        self._capture_stream = None
+        self._capture_token: Optional[int] = None
+        self._capture_chunks: List[Any] = []
+        self._capture_started = 0.0
+        self._handsfree = None
+        self._handsfree_lock = threading.Lock()
+        self._handsfree_error = ""
+        self._handsfree_heard = ""
+        self._handsfree_ack_index = 0
         self._image_manager = None
         self._research_agent = None
+        self._memory_service = None
         self.state = "starting"
         self.raw_config: Dict[str, Any] = {}
         self.config: Dict[str, Any] = {}
@@ -136,7 +160,31 @@ class DashboardRuntime:
         }
 
     def reasoning_config(self) -> Dict[str, Any]:
-        return self.config.get("reasoning", {}) or {}
+        """Effective reasoning settings (env > config.yaml, secrets excluded)."""
+        cfg = dict(self.config.get("reasoning", {}) or {})
+        env_provider = os.environ.get("FRIDAY_REASONING_PROVIDER", "").strip().lower()
+        if env_provider:
+            cfg["provider"] = env_provider
+        if str(cfg.get("provider", "llamacpp")).lower() == "nvidia":
+            # Env vars override config.yaml for model/base URL, matching the
+            # provider itself. The API key is never exposed here.
+            try:
+                from friday.reasoning.nvidia_reasoner import resolve_settings
+
+                nvidia_cfg = dict(cfg.get("nvidia", {}) or {})
+                settings = resolve_settings(nvidia_cfg)
+                cfg["model"] = settings["model"]
+                cfg["base_url"] = settings["base_url"]
+                cfg["endpoint"] = settings["base_url"]
+                cfg["timeout"] = nvidia_cfg.get(
+                    "timeout", cfg.get("timeout", 30)
+                )
+                cfg["fallback_to_local"] = bool(
+                    nvidia_cfg.get("fallback_to_local", True)
+                )
+            except Exception as exc:  # keep the dashboard alive
+                logger.debug("[DASHBOARD] NVIDIA settings unavailable: %s", exc)
+        return cfg
 
     def tools_config(self) -> Dict[str, Any]:
         return self.config.get("tools", {}) or {}
@@ -153,13 +201,29 @@ class DashboardRuntime:
             try:
                 from friday.core.assistant import Friday
 
-                self._assistant = Friday(config_path=self.config_path, text_mode=True)
+                self._assistant = Friday(
+                    config_path=self.config_path,
+                    text_mode=True,
+                    memory_service=self.memory_service(),
+                    source="chat",
+                )
                 self.state = "ready"
                 return self._assistant
             except Exception as exc:
                 self._assistant_error = str(exc)
                 self.state = "degraded"
                 raise
+
+    def memory_service(self):
+        """Process-wide persistent memory service (also exposed to the API)."""
+        with self._lock:
+            if self._memory_service is None:
+                from friday.memory import MemoryService
+
+                self._memory_service = MemoryService.from_config(
+                    self.config.get("memory", {}) or {}, source="chat"
+                )
+            return self._memory_service
 
     def assistant_state(self) -> Dict[str, Any]:
         assistant = self._assistant
@@ -205,6 +269,29 @@ class DashboardRuntime:
         if provider == "ollama":
             base = endpoint.split("/api/")[0] if endpoint else "http://localhost:11434"
             probe = _http_probe(f"{base}/api/tags", timeout=2.0)
+        elif provider == "nvidia":
+            from friday.reasoning.nvidia_reasoner import has_credentials
+
+            if not has_credentials():
+                return {
+                    "status": "offline",
+                    "detail": (
+                        "NVIDIA API key not configured "
+                        "(set NVIDIA_API_KEY or FRIDAY_NVIDIA_API_KEY)"
+                    ),
+                    "provider": provider,
+                    "endpoint": endpoint,
+                }
+            api_key = (
+                os.environ.get("NVIDIA_API_KEY")
+                or os.environ.get("FRIDAY_NVIDIA_API_KEY")
+                or ""
+            ).strip()
+            probe = _http_probe(
+                f"{endpoint}/models",
+                timeout=3.0,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
         else:
             probe = _http_probe(f"{endpoint}/health", timeout=2.0)
         if not probe.get("reachable"):
@@ -349,19 +436,32 @@ class DashboardRuntime:
         endpoint = str(rcfg.get("endpoint", "") or "")
         reasoning_health = self._reasoning_health()
         reasoning_loaded = reasoning_health.get("status") == "healthy"
+        is_nvidia = provider == "nvidia"
+        if is_nvidia:
+            family = "NVIDIA API Catalog"
+            display_name = model_path or provider
+            context_window = None
+            quantization = ""
+        else:
+            family = "llama.cpp" if provider == "llamacpp" else "Ollama"
+            display_name = Path(model_path).name or model_path or provider
+            context_window = (
+                self._server_context_window(endpoint) if reasoning_loaded else None
+            )
+            quantization = _quantization_hint(model_path)
         models: List[Dict[str, Any]] = [
             {
                 "id": f"reasoning:{provider}",
-                "name": Path(model_path).name or model_path or provider,
-                "family": "llama.cpp" if provider == "llamacpp" else "Ollama",
+                "name": display_name,
+                "family": family,
                 "kind": "reasoning",
                 "provider": provider,
                 "path": model_path,
-                "quantization": _quantization_hint(model_path),
+                "quantization": quantization,
                 "active": True,
                 "loaded": reasoning_loaded,
                 "health": reasoning_health.get("status", "unknown"),
-                "context_window": self._server_context_window(endpoint) if reasoning_loaded else None,
+                "context_window": context_window,
                 "endpoint": endpoint,
                 "error": "" if reasoning_loaded else reasoning_health.get("detail", ""),
             }
@@ -716,17 +816,528 @@ class DashboardRuntime:
             }
         except Exception as exc:
             mic = {"available": False, "detail": f"audio unavailable: {exc}"}
+        with self._capture_lock:
+            recording = self._capture_stream is not None
+        hands_free = self.handsfree_state()
+        # Hands-free runs the machine microphone continuously, so it is a real
+        # capture path even when the browser-recording stream is not open.
+        capture_active = recording or bool(hands_free.get("active"))
         return {
             "state": self.assistant_state()["state"],
-            "capture_active": False,
+            "capture_active": capture_active,
             "microphone": mic,
             "pipeline": ["IDLE", "LISTENING", "PROCESSING", "EXECUTING", "RESPONDING"],
-            "capture_supported": False,
+            "capture_supported": bool(mic["available"]),
+            "hands_free": hands_free,
+            "hands_free_active": bool(self._handsfree and self._handsfree.active),
+            "hands_free_state": self._handsfree.state if self._handsfree else "STOPPED",
+            "audio_hub": get_audio_hub().state(),
+            "wake_word": self._wake_word(),
             "reason": (
-                "Live microphone capture is owned by the desktop voice runtime. "
-                "This web dashboard shows real conversation state and supports typed chat."
+                "Say \u201cHey Friday\u201d to talk. Audio is captured from the machine microphone, "
+                "transcribed locally by faster-whisper, and answered by the same conversation "
+                "pipeline as typed chat."
+                if mic["available"]
+                else "No microphone was detected, so hands-free and browser recording are "
+                "unavailable. Typed chat still works."
             ),
         }
+
+    # ------------------------------------------------------------------
+    # Voice capture / synthesis (browser audio)
+    # ------------------------------------------------------------------
+    def _voice_config(self) -> Dict[str, Any]:
+        return self.config.get("voice", {}) or {}
+
+    def _get_stt(self):
+        with self._lock:
+            if self._stt is not None:
+                return self._stt
+            if self._stt_error:
+                raise RuntimeError(self._stt_error)
+            cfg = self._voice_config().get("stt", {}) or {}
+            try:
+                from friday.voice.speech_to_text import SpeechToText
+
+                self._stt = SpeechToText(
+                    model_size=cfg.get("model", "small.en"),
+                    device=cfg.get("device", "cpu"),
+                    compute_type=cfg.get("compute_type", "int8"),
+                    language=cfg.get("language", "en"),
+                )
+                return self._stt
+            except Exception as exc:
+                self._stt_error = str(exc)
+                raise
+
+    def _get_tts(self):
+        with self._lock:
+            if self._tts is not None:
+                return self._tts
+            if self._tts_error:
+                raise RuntimeError(self._tts_error)
+            cfg = self._voice_config().get("tts", {}) or {}
+            try:
+                from friday.voice.text_to_speech import TextToSpeech
+
+                self._tts = TextToSpeech(
+                    engine=cfg.get("engine", "piper"),
+                    fallback_engine=cfg.get("fallback_engine", "kokoro"),
+                    voice=cfg.get("voice", "af_heart"),
+                    speed=float(cfg.get("speed", 1.0) or 1.0),
+                    device=cfg.get("device", "auto"),
+                )
+                return self._tts
+            except Exception as exc:
+                self._tts_error = str(exc)
+                raise
+
+    def transcribe_audio(self, wav_bytes: bytes) -> Dict[str, Any]:
+        """Transcribe a 16-bit PCM WAV payload recorded by the browser."""
+        import io
+        import wave
+
+        import numpy as np
+
+        if not wav_bytes:
+            raise ValueError("Audio payload is empty.")
+
+        try:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+                channels = wav_file.getnchannels()
+                width = wav_file.getsampwidth()
+                rate = wav_file.getframerate()
+                frames = wav_file.readframes(wav_file.getnframes())
+        except wave.Error as exc:
+            raise ValueError(f"Unsupported WAV payload: {exc}") from exc
+
+        if width != 2:
+            raise ValueError("Only 16-bit PCM WAV audio is supported.")
+
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1)
+        if rate != 16000 and samples.size:
+            target = max(1, int(len(samples) / rate * 16000))
+            samples = np.interp(
+                np.linspace(0.0, 1.0, num=target, endpoint=False),
+                np.linspace(0.0, 1.0, num=len(samples), endpoint=False),
+                samples,
+            ).astype(np.float32)
+
+        duration = float(len(samples)) / 16000.0
+        if duration < 0.25:
+            raise ValueError("Recording is too short to transcribe.")
+
+        return self._transcribe_samples(samples)
+
+    def _transcribe_samples(self, samples, detailed: bool = False, publish: bool = True) -> Dict[str, Any]:
+        duration = float(len(samples)) / 16000.0
+        stt = self._get_stt()
+        meta = None
+        if detailed:
+            text, rtf, meta = stt.transcribe_detailed(samples)
+        else:
+            text, rtf = stt.transcribe(samples)
+        if publish:
+            bus.publish_threadsafe(
+                make_event(
+                    "voice.transcribed",
+                    source="voice",
+                    status="completed",
+                    message=_truncate(text, 160),
+                    data={"text": text, "duration_seconds": round(duration, 2)},
+                )
+            )
+        result = {
+            "text": text,
+            "duration_seconds": round(duration, 2),
+            "rtf": round(float(rtf), 3),
+            "device": getattr(stt, "active_device", ""),
+            "model": getattr(stt, "model_size", ""),
+        }
+        if meta is not None:
+            result["quality_ok"] = bool(getattr(meta, "quality_ok", True))
+            result["avg_logprob"] = getattr(meta, "avg_logprob", None)
+            result["no_speech_prob"] = getattr(meta, "no_speech_prob", None)
+        return result
+
+    def start_capture(self) -> Dict[str, Any]:
+        """Start recording the machine microphone (fallback when the browser refuses)."""
+        import numpy as np
+        import sounddevice as sd
+
+        with self._capture_lock:
+            if self._capture_stream is not None:
+                raise ValueError("A recording is already in progress.")
+            try:
+                device_name = str(sd.query_devices(kind="input").get("name", ""))
+            except Exception:
+                device_name = ""
+            chunks: List[Any] = []
+            self._capture_chunks = chunks
+
+            hub = get_audio_hub()
+            try:
+                hub.acquire("capture", blocksize=1600)
+            except RuntimeError as exc:
+                raise ValueError(
+                    f"The microphone is in use ({exc}). Stop hands-free listening first."
+                ) from exc
+            self._capture_token = hub.subscribe(
+                lambda frame: chunks.append(np.asarray(frame, dtype=np.float32).reshape(-1, 1))
+            )
+            self._capture_stream = hub.stream or object()
+            self._capture_started = time.time()
+
+        return {"recording": True, "sample_rate": 16000, "device": device_name}
+
+    def stop_capture(self) -> Dict[str, Any]:
+        """Stop the machine-microphone recording and transcribe it."""
+        import numpy as np
+
+        with self._capture_lock:
+            stream = self._capture_stream
+            if stream is None:
+                raise ValueError("No recording is in progress.")
+            self._capture_stream = None
+            token = self._capture_token
+            self._capture_token = None
+            hub = get_audio_hub()
+            try:
+                if token is not None:
+                    hub.unsubscribe(token)
+                hub.release("capture")
+            except Exception:
+                pass
+            chunks = self._capture_chunks or []
+            self._capture_chunks = []
+
+        if not chunks:
+            raise ValueError("No audio was captured. Check the microphone and try again.")
+
+        samples = np.concatenate(chunks, axis=0).reshape(-1).astype(np.float32)
+        if float(len(samples)) / 16000.0 < 0.25:
+            raise ValueError("Recording is too short to transcribe.")
+        return self._transcribe_samples(samples)
+
+    def synthesize_speech(self, text: str) -> bytes:
+        """Render text to WAV bytes locally (browser playback)."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("Text must not be blank.")
+        tts = self._get_tts()
+        return tts.synthesize_wav(text[:2000])
+
+    # ------------------------------------------------------------------
+    # Hands-free wake-word listening (machine microphone)
+    # ------------------------------------------------------------------
+    def _wake_word(self) -> str:
+        raw = self._voice_config().get("hands_free")
+        if isinstance(raw, dict) and raw.get("wake_word"):
+            return str(raw["wake_word"]).strip() or "friday"
+        return str(self.config.get("wake_word") or "friday").strip() or "friday"
+
+    def _handsfree_settings(self) -> tuple[bool, Dict[str, Any]]:
+        raw = self._voice_config().get("hands_free", True)
+        if isinstance(raw, dict):
+            options = dict(raw)
+            enabled = bool(options.pop("enabled", True))
+        else:
+            options = {}
+            enabled = bool(raw)
+        allowed = {
+            "sample_rate",
+            "block_ms",
+            "silence_ms",
+            "min_speech_ms",
+            "max_utterance_ms",
+            "pre_roll_ms",
+            "command_timeout_seconds",
+            "session_timeout_seconds",
+            "flush_timeout_seconds",
+            "rms_floor",
+            "speech_ratio",
+        }
+        options = {k: v for k, v in options.items() if k in allowed and v is not None}
+        return enabled, options
+
+    def _acknowledgement_phrases(self) -> List[str]:
+        """Spoken replies used after a bare wake word.
+
+        ``voice.hands_free.acknowledgement`` accepts one phrase or a list; a
+        list is cycled so repeated wakes do not sound robotic. ``false``,
+        null, or an empty list disables the spoken acknowledgement.
+        """
+        raw = self._voice_config().get("hands_free")
+        if not isinstance(raw, dict):
+            return []
+        value = raw.get("acknowledgement")
+        if value is None or value is False:
+            return []
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple)):
+            values = [str(item) for item in value]
+        else:
+            return []
+        return [item.strip() for item in values if item.strip()]
+
+    def handsfree_state(self) -> Dict[str, Any]:
+        listener = self._handsfree
+        enabled, _options = self._handsfree_settings()
+        return {
+            "enabled": enabled,
+            "active": bool(listener and listener.active),
+            "state": listener.state if listener else "STOPPED",
+            "wake_word": listener.wake_word if listener else self._wake_word(),
+            "error": self._handsfree_error,
+            "heard": self._handsfree_heard,
+        }
+
+    def _publish_handsfree(self, status: Optional[str] = None) -> None:
+        state = self.handsfree_state()
+        if status:
+            state["state"] = status
+            state["active"] = status not in ("STOPPED", "ERROR")
+        bus.publish_threadsafe(
+            make_event(
+                "voice.handsfree",
+                source="voice",
+                status=state["state"],
+                message=self._handsfree_error if state["state"] == "ERROR" else "",
+                data=state,
+            )
+        )
+
+    def _handsfree_on_state(self, state: str) -> None:
+        logger.info("[WAKE] state -> %s", state)
+        self._publish_handsfree(state)
+
+    def _handsfree_on_wake(self, text: str) -> None:
+        self._handsfree_heard = text.strip()
+        # Start an active conversation session so follow-up utterances do not
+        # need the wake word until the user says "stop listening".
+        try:
+            assistant = self.ensure_assistant()
+            assistant.conversation_manager.session.start()
+            assistant.conversation_manager.start_session()
+        except Exception as exc:
+            logger.debug("[WAKE] session start failed: %s", exc)
+        self._publish_handsfree("COMMAND_LISTENING")
+
+    def _handsfree_on_acknowledge(self) -> None:
+        """Speak a short reply after a bare wake word ("Yes Abhi" / "Yes boss")."""
+        phrases = self._acknowledgement_phrases()
+        if not phrases:
+            return
+        index = self._handsfree_ack_index % len(phrases)
+        self._handsfree_ack_index = (index + 1) % len(phrases)
+        phrase = phrases[index]
+        logger.info("[WAKE] Acknowledging wake word: %r", phrase)
+        self._publish_handsfree("RESPONDING")
+        try:
+            self._get_tts().speak(phrase)
+        except Exception as exc:
+            self._handsfree_error = f"speech playback failed: {exc}"
+            logger.warning("[WAKE] %s", self._handsfree_error)
+        finally:
+            self._publish_handsfree("COMMAND_LISTENING")
+
+    def _handsfree_on_error(self, message: str) -> None:
+        self._handsfree_error = str(message or "hands-free listener failed")
+        logger.warning("[WAKE] %s", self._handsfree_error)
+        self._publish_handsfree("ERROR")
+
+    def _handsfree_on_session_end(self) -> None:
+        """Close the conversation session when the hands-free session ends.
+
+        The listener owns wake/session timing; the assistant owns conversation
+        memory. Ending one must end the other, otherwise a later wake inherits
+        topics and pronouns from a conversation the user already closed
+        ``stop_session`` replaces the context wholesale (history included).
+        """
+        assistant = self._assistant  # never spin up an assistant just to reset
+        if assistant is None:
+            return
+        try:
+            assistant.conversation_manager.stop_session()
+        except Exception as exc:
+            logger.debug("[WAKE] conversation reset failed: %s", exc)
+
+    def _handsfree_on_command(self, command: str) -> None:
+        """Run one spoken command and speak the reply (listener is paused)."""
+        command = (command or "").strip()
+        if not command:
+            return
+        bus.publish_threadsafe(
+            make_event(
+                "transcript.updated",
+                source="voice",
+                status="completed",
+                message=_truncate(command, 240),
+                data={"role": "user", "text": command, "source": "handsfree"},
+            )
+        )
+        try:
+            payload = self.submit_chat(command)
+            response_text = str(payload.get("response") or "").strip()
+        except Exception as exc:
+            response_text = f"I couldn't process that request: {exc}"
+            logger.warning("[WAKE] command failed: %s", exc)
+        if not response_text:
+            return
+        bus.publish_threadsafe(
+            make_event(
+                "transcript.updated",
+                source="voice",
+                status="completed",
+                message=_truncate(response_text, 240),
+                data={"role": "assistant", "text": response_text, "source": "handsfree"},
+            )
+        )
+        try:
+            self._publish_handsfree("RESPONDING")
+            self._get_tts().speak(response_text)
+        except Exception as exc:
+            self._handsfree_error = f"speech playback failed: {exc}"
+            logger.warning("[WAKE] %s", self._handsfree_error)
+
+    def _transcribe_handsfree(self, samples) -> str:
+        peak = 0.0
+        try:
+            import numpy as np
+
+            from friday.voice.speech_evidence import analyse_utterance
+
+            audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+            peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+
+            # Root-cause gate: loud transients (desk knocks, mouse clicks,
+            # keyboard taps, thuds) can satisfy the energy/VAD gate and make
+            # Whisper hallucinate "boom." / "tell me.". Reject an utterance
+            # that has no sustained speech-shaped audio *before* STT runs, so
+            # the hallucinated text is never published or acted on.
+            evidence = analyse_utterance(audio)
+            if not evidence.is_speech:
+                logger.info(
+                    "[WAKE] rejected non-speech (reason=%s peak=%.4f frames=%d/%d "
+                    "speech=%.2f)",
+                    evidence.reason,
+                    peak,
+                    evidence.speech_frames,
+                    evidence.active_frames,
+                    evidence.speech_ratio,
+                )
+                return ""
+
+            # Microphones on laptops often deliver speech at a very low level.
+            # Normalise to a comfortable peak before recognition so quiet
+            # speech is not transcribed as silence.
+            if peak > 0.002:
+                audio = audio * min(24.0, 0.9 / peak)
+            result = self._transcribe_samples(audio, detailed=True, publish=False)
+            text = str(result.get("text") or "")
+            if text and result.get("quality_ok") is False:
+                logger.info(
+                    "[WAKE] rejected low-quality transcript (no_speech=%s "
+                    "avg_logprob=%s): %r",
+                    result.get("no_speech_prob"),
+                    result.get("avg_logprob"),
+                    text[:160],
+                )
+                return ""
+            if text:
+                bus.publish_threadsafe(
+                    make_event(
+                        "voice.transcribed",
+                        source="voice",
+                        status="completed",
+                        message=_truncate(text, 160),
+                        data={
+                            "text": text,
+                            "duration_seconds": result.get("duration_seconds"),
+                        },
+                    )
+                )
+        except Exception as exc:
+            logger.warning("[WAKE] transcription failed: %s", exc)
+            return ""
+        logger.info("[WAKE] captured peak %.4f -> %r", peak, text[:160])
+        if text:
+            logger.info("[WAKE] heard %r", text[:160])
+        return text
+
+    def start_handsfree(self) -> Dict[str, Any]:
+        """Start always-on wake-word listening on the machine microphone."""
+        with self._handsfree_lock:
+            listener = self._handsfree
+            if listener is not None and listener.active:
+                return self.handsfree_state()
+
+            enabled, options = self._handsfree_settings()
+            if not enabled:
+                raise ValueError(
+                    "Hands-free listening is disabled. Set voice.hands_free: true in config.yaml."
+                )
+
+            try:
+                import sounddevice as sd
+
+                inputs = [
+                    d for d in sd.query_devices() if int(d.get("max_input_channels") or 0) > 0
+                ]
+            except Exception as exc:
+                raise RuntimeError(f"Audio subsystem unavailable: {exc}") from exc
+            if not inputs:
+                raise RuntimeError("No microphone was detected, so hands-free listening cannot start.")
+
+            from friday.web.handsfree import HandsFreeConfig, HandsFreeListener
+
+            vad_cfg = self._voice_config().get("vad", {})
+            vad_enabled = bool(vad_cfg.get("enabled", True)) if isinstance(vad_cfg, dict) else True
+            self._handsfree_error = ""
+            self._handsfree_heard = ""
+            listener = HandsFreeListener(
+                transcribe=self._transcribe_handsfree,
+                on_command=self._handsfree_on_command,
+                on_state=self._handsfree_on_state,
+                on_wake=self._handsfree_on_wake,
+                on_acknowledge=self._handsfree_on_acknowledge,
+                on_error=self._handsfree_on_error,
+                on_session_end=self._handsfree_on_session_end,
+                interrupt=lambda: self._get_tts().stop(),
+                config=HandsFreeConfig(wake_word=self._wake_word(), **options),
+                vad=None if vad_enabled else False,
+            )
+            self._handsfree = listener
+            listener.start()
+
+            # Give the capture thread a moment to open the microphone so the
+            # returned state reflects reality instead of a stale STOPPED.
+            deadline = time.monotonic() + 1.0
+            while listener.active and listener.state == "STOPPED" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            initial_state = listener.state if listener.state != "STOPPED" else "WAKE_LISTENING"
+
+        self._publish_handsfree(initial_state)
+        return self.handsfree_state()
+
+    def stop_handsfree(self) -> Dict[str, Any]:
+        """Stop wake-word listening and release the microphone."""
+        with self._handsfree_lock:
+            listener = self._handsfree
+            self._handsfree = None
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception as exc:
+                    logger.debug("[WAKE] stop failed: %s", exc)
+        # The listener may have been already dead, so reset explicitly: a
+        # stopped voice console must not leave an active conversation session.
+        self._handsfree_on_session_end()
+        self._publish_handsfree("STOPPED")
+        return self.handsfree_state()
 
     # ------------------------------------------------------------------
     # Settings (redacted)
@@ -802,11 +1413,20 @@ class DashboardRuntime:
     # Lifecycle
     # ------------------------------------------------------------------
     def shutdown(self) -> None:
+        try:
+            self.stop_handsfree()
+        except Exception:
+            pass
         assistant = self._assistant
         self._assistant = None
         if assistant is not None:
             try:
                 assistant.shutdown()
+            except Exception:
+                pass
+        if self._memory_service is not None:
+            try:
+                self._memory_service.close()
             except Exception:
                 pass
         if self._image_manager is not None:

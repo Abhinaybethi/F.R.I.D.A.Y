@@ -23,6 +23,7 @@ import { relativeTime } from "../lib/format";
 import type {
   AgentInfo,
   ChatResponse,
+  HandsFreeState,
   ModelInfo,
   Overview,
   SettingsResponse,
@@ -339,6 +340,33 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
             previous ? { ...previous, state: event.status ?? previous.state } : previous,
           );
           break;
+        case "voice.handsfree": {
+          const status = event.status ?? "STOPPED";
+          const data = (event.data ?? {}) as Record<string, unknown>;
+          const handsFree: HandsFreeState = {
+            enabled: data.enabled !== false,
+            active:
+              typeof data.active === "boolean"
+                ? data.active
+                : status !== "STOPPED" && status !== "ERROR",
+            state: status,
+            wake_word: String(data.wake_word ?? "friday"),
+            error: String(data.error ?? event.message ?? ""),
+            heard: String(data.heard ?? ""),
+          };
+          setVoice((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  hands_free: handsFree,
+                  hands_free_active: handsFree.active,
+                  hands_free_state: handsFree.state,
+                  wake_word: handsFree.wake_word,
+                }
+              : previous,
+          );
+          break;
+        }
         case "transcript.updated": {
           const text = String(event.data?.text ?? event.message ?? "");
           if (!text) break;

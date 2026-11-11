@@ -9,10 +9,12 @@ const PRIMARY: Array<{ to: string; label: string; icon: IconName; end?: boolean 
   { to: "/", label: "Home", icon: "home", end: true },
   { to: "/chat", label: "Chat", icon: "chat" },
   { to: "/voice", label: "Voice", icon: "mic" },
+  { to: "/news", label: "News", icon: "book" },
   { to: "/vision", label: "Vision", icon: "eye" },
   { to: "/image", label: "Create Image", icon: "image" },
   { to: "/research", label: "Research", icon: "search" },
   { to: "/code", label: "Code", icon: "code" },
+  { to: "/memory", label: "Memory", icon: "archive" },
 ];
 
 const OPERATIONS: Array<{ to: string; label: string; icon: IconName }> = [

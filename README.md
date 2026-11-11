@@ -8,6 +8,8 @@ The system is designed around a **local-first architecture**: speech processing 
 
 ## 🚀 Current Architecture
 
+![F.R.I.D.A.Y. Neural Hologram](frontend/public/assets/holographic-reference.png)
+
 ```text
                     ┌──────────────────────┐
                     │      Microphone      │

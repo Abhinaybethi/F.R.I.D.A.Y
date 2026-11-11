@@ -104,7 +104,7 @@ def validate_config(config: dict) -> Tuple[bool, dict, list[str]]:
     reasoning = dict(sanitized.get("reasoning", {}))
 
     provider = reasoning.get("provider", "llamacpp")
-    if provider not in ("ollama", "llamacpp"):
+    if provider not in ("ollama", "llamacpp", "nvidia"):
         messages.append(f"Invalid reasoning provider {provider!r}; defaulting to 'llamacpp'.")
         provider = "llamacpp"
     reasoning["provider"] = provider
@@ -278,6 +278,59 @@ def validate_config(config: dict) -> Tuple[bool, dict, list[str]]:
         research["prefer_official"] = False
 
     sanitized["research"] = research
+
+    # 6. Persistent memory (Phase 2) — additive, local-first, fails soft.
+    memory = dict(sanitized.get("memory", {}) or {})
+
+    if not isinstance(memory.get("enabled", True), bool):
+        messages.append(
+            f"Invalid memory.enabled {memory.get('enabled')!r}; defaulting to True."
+        )
+        memory["enabled"] = True
+    if not isinstance(memory.get("vector_enabled", True), bool):
+        messages.append(
+            f"Invalid memory.vector_enabled {memory.get('vector_enabled')!r}; defaulting to True."
+        )
+        memory["vector_enabled"] = True
+    if not isinstance(memory.get("summaries_enabled", True), bool):
+        memory["summaries_enabled"] = True
+
+    for key, default in (
+        ("db_path", ".data/memory.db"),
+        ("vector_path", ".data/rag/conversations"),
+        ("vector_collection", "conversation_memory"),
+        ("backup_dir", ".data/backups"),
+    ):
+        value = memory.get(key, default)
+        if not isinstance(value, str) or not value.strip():
+            messages.append(f"Invalid memory.{key} {value!r}; defaulting to {default!r}.")
+            memory[key] = default
+        else:
+            memory[key] = value.strip()
+
+    for key, default, lo, hi in (
+        ("summary_min_turns", 4, 1, 1000),
+        ("retention_days", 0, 0, 36500),
+        ("max_turns_per_session", 0, 0, 1_000_000),
+        ("search_limit", 20, 1, 200),
+    ):
+        value = memory.get(key, default)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            messages.append(f"Invalid memory.{key} {value!r}; defaulting to {default}.")
+            memory[key] = default
+        else:
+            memory[key] = max(lo, min(hi, int(value)))
+
+    dedupe = memory.get("dedupe_window_seconds", 3.0)
+    if not isinstance(dedupe, (int, float)) or isinstance(dedupe, bool):
+        messages.append(
+            f"Invalid memory.dedupe_window_seconds {dedupe!r}; defaulting to 3.0."
+        )
+        memory["dedupe_window_seconds"] = 3.0
+    else:
+        memory["dedupe_window_seconds"] = float(max(0.0, min(3600.0, dedupe)))
+
+    sanitized["memory"] = memory
 
     # Log any configuration sanitization messages
     for msg in messages:

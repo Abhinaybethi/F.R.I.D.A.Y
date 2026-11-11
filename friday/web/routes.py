@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -61,6 +61,10 @@ class ResearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=_MAX_PROMPT)
 
 
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
 class ToolExecuteRequest(BaseModel):
     target: str = Field(default="", max_length=2000)
     arguments: Dict[str, Any] = Field(default_factory=dict)
@@ -68,6 +72,49 @@ class ToolExecuteRequest(BaseModel):
         default=False,
         description="Explicit acknowledgement for actions that mutate the system.",
     )
+
+
+class MemoryFactRequest(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=200)
+    predicate: str = Field(..., min_length=1, max_length=200)
+    object: str = Field(..., min_length=1, max_length=2000)
+    category: str = Field(default="general", max_length=64)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_message_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class MemoryFactUpdateRequest(BaseModel):
+    subject: Optional[str] = Field(default=None, max_length=200)
+    predicate: Optional[str] = Field(default=None, max_length=200)
+    object: Optional[str] = Field(default=None, max_length=2000)
+    category: Optional[str] = Field(default=None, max_length=64)
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    reason: str = Field(default="", max_length=500)
+
+
+class MemoryTaskRequest(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=2000)
+    source_session_id: Optional[str] = Field(default=None, max_length=200)
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryTaskStepRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=200)
+    target: str = Field(default="", max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
+    status: str = Field(default="pending", max_length=32)
+
+
+class MemoryTaskStepUpdateRequest(BaseModel):
+    status: Optional[str] = Field(default=None, max_length=32)
+    result: Optional[Dict[str, Any]] = None
+    verification_status: Optional[str] = Field(default=None, max_length=64)
+    error: Optional[str] = Field(default=None, max_length=2000)
+
+
+class MemoryPruneRequest(BaseModel):
+    dry_run: bool = True
+    retention_days: Optional[int] = Field(default=None, ge=0, le=36500)
 
 
 # ----------------------------------------------------------------------
@@ -411,6 +458,75 @@ def voice_state_route() -> Dict[str, Any]:
     return _runtime().voice_state()
 
 
+@router.post("/voice/transcribe", summary="Transcribe a browser-recorded WAV payload")
+async def voice_transcribe_route(request: Request) -> Dict[str, Any]:
+    body = await request.body()
+    if not body:
+        raise _error(422, "Audio payload must not be empty.", "invalid_input")
+    if len(body) > 25 * 1024 * 1024:
+        raise _error(413, "Audio payload is too large.", "payload_too_large")
+    try:
+        return await run_in_threadpool(_runtime().transcribe_audio, body)
+    except ValueError as exc:
+        raise _error(422, str(exc), "invalid_audio") from exc
+    except Exception as exc:
+        raise _error(503, str(exc), "transcription_failed") from exc
+
+
+@router.post("/voice/speak", summary="Synthesize a spoken reply as WAV")
+async def voice_speak_route(body: SpeakRequest) -> Response:
+    text = body.text.strip()
+    if not text:
+        raise _error(422, "Text must not be blank.", "invalid_input")
+    try:
+        audio = await run_in_threadpool(_runtime().synthesize_speech, text)
+    except ValueError as exc:
+        raise _error(422, str(exc), "invalid_input") from exc
+    except Exception as exc:
+        raise _error(503, str(exc), "tts_failed") from exc
+    return Response(content=audio, media_type="audio/wav")
+
+
+@router.post("/voice/capture/start", summary="Start backend microphone capture")
+async def voice_capture_start_route() -> Dict[str, Any]:
+    try:
+        return await run_in_threadpool(_runtime().start_capture)
+    except ValueError as exc:
+        raise _error(409, str(exc), "capture_conflict") from exc
+    except Exception as exc:
+        raise _error(503, str(exc), "capture_failed") from exc
+
+
+@router.post("/voice/capture/stop", summary="Stop backend capture and transcribe it")
+async def voice_capture_stop_route() -> Dict[str, Any]:
+    try:
+        return await run_in_threadpool(_runtime().stop_capture)
+    except ValueError as exc:
+        raise _error(422, str(exc), "invalid_audio") from exc
+    except Exception as exc:
+        raise _error(503, str(exc), "transcription_failed") from exc
+
+
+@router.post("/voice/wake/start", summary="Start always-on hands-free wake-word listening")
+async def voice_wake_start_route() -> Dict[str, Any]:
+    try:
+        return await run_in_threadpool(_runtime().start_handsfree)
+    except ValueError as exc:
+        raise _error(409, str(exc), "handsfree_disabled") from exc
+    except RuntimeError as exc:
+        raise _error(503, str(exc), "handsfree_unavailable") from exc
+    except Exception as exc:
+        raise _error(503, str(exc), "handsfree_failed") from exc
+
+
+@router.post("/voice/wake/stop", summary="Stop hands-free wake-word listening")
+async def voice_wake_stop_route() -> Dict[str, Any]:
+    try:
+        return await run_in_threadpool(_runtime().stop_handsfree)
+    except Exception as exc:
+        raise _error(503, str(exc), "handsfree_failed") from exc
+
+
 # ----------------------------------------------------------------------
 # Image generation
 # ----------------------------------------------------------------------
@@ -646,6 +762,259 @@ def knowledge_documents_route(limit: int = Query(default=100, ge=1, le=500)) -> 
             "RAG service to be reachable; no content is returned here."
         ),
     }
+
+
+# ----------------------------------------------------------------------
+# Persistent memory (Phase 2) — read-first, explicit mutation
+# ----------------------------------------------------------------------
+def _memory():
+    return _runtime().memory_service()
+
+
+@router.get("/memory/stats", summary="Persistent memory size and record counts")
+def memory_stats_route() -> Dict[str, Any]:
+    return _memory().stats()
+
+
+@router.get("/memory/sessions", summary="List recent conversation sessions")
+def memory_sessions_route(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    source: Optional[str] = Query(default=None, max_length=32),
+    from_ts: Optional[str] = Query(default=None, alias="from", max_length=40),
+    to_ts: Optional[str] = Query(default=None, alias="to", max_length=40),
+) -> Dict[str, Any]:
+    return _memory().list_sessions(
+        limit=limit, offset=offset, source=source, from_ts=from_ts, to_ts=to_ts
+    )
+
+
+@router.get("/memory/sessions/{session_id}", summary="Raw turns for one session")
+def memory_session_route(session_id: str) -> Dict[str, Any]:
+    payload = _memory().get_session(session_id)
+    if payload is None:
+        raise _error(404, f"No memory session {session_id!r}.", "memory_session_not_found")
+    return payload
+
+
+@router.delete("/memory/sessions/{session_id}", summary="Delete a session and its turns")
+def memory_session_delete_route(session_id: str) -> Dict[str, Any]:
+    result = _memory().delete_session(session_id)
+    if not result.get("deleted"):
+        raise _error(404, f"No memory session {session_id!r}.", "memory_session_not_found")
+    return result
+
+
+@router.get("/memory/search", summary="Search stored turns by keyword, meaning or date")
+def memory_search_route(
+    q: str = Query(default="", max_length=400),
+    mode: str = Query(default="hybrid", max_length=16),
+    from_ts: Optional[str] = Query(default=None, alias="from", max_length=40),
+    to_ts: Optional[str] = Query(default=None, alias="to", max_length=40),
+    topic: Optional[str] = Query(default=None, max_length=120),
+    session_id: Optional[str] = Query(default=None, max_length=200),
+    source: Optional[str] = Query(default=None, max_length=32),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> Dict[str, Any]:
+    if mode not in ("hybrid", "keyword", "semantic"):
+        raise _error(422, f"Unknown search mode {mode!r}.", "invalid_mode")
+    return _memory().search(
+        q,
+        mode=mode,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        topic=topic,
+        session_id=session_id,
+        source=source,
+        limit=limit,
+    )
+
+
+@router.get("/memory/facts", summary="List stored facts")
+def memory_facts_route(
+    q: str = Query(default="", max_length=200),
+    category: Optional[str] = Query(default=None, max_length=64),
+    include_deleted: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    return _memory().list_facts(
+        q,
+        category=category,
+        include_deleted=include_deleted,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/memory/facts", summary="Create or update a fact")
+def memory_fact_create_route(body: MemoryFactRequest) -> Dict[str, Any]:
+    record = _memory().upsert_fact(
+        body.subject,
+        body.predicate,
+        body.object,
+        category=body.category,
+        confidence=body.confidence,
+        source_message_id=body.source_message_id,
+    )
+    if record is None:
+        raise _error(
+            422,
+            "Fact was not stored (blank fields or sensitive content).",
+            "memory_fact_rejected",
+        )
+    return record.to_dict()
+
+
+@router.get("/memory/facts/{fact_id}", summary="Read one fact with its revision history")
+def memory_fact_route(fact_id: str) -> Dict[str, Any]:
+    payload = _memory().get_fact(fact_id)
+    if payload is None:
+        raise _error(404, f"No fact {fact_id!r}.", "memory_fact_not_found")
+    return payload
+
+
+@router.post("/memory/facts/{fact_id}/correct", summary="Correct a fact (audited)")
+def memory_fact_correct_route(fact_id: str, body: MemoryFactUpdateRequest) -> Dict[str, Any]:
+    try:
+        record = _memory().correct_fact(
+            fact_id,
+            subject=body.subject,
+            predicate=body.predicate,
+            object_value=body.object,
+            category=body.category,
+            confidence=body.confidence,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        raise _error(422, str(exc), "memory_fact_rejected") from exc
+    if record is None:
+        raise _error(404, f"No fact {fact_id!r}.", "memory_fact_not_found")
+    return record.to_dict()
+
+
+@router.delete("/memory/facts/{fact_id}", summary="Soft-delete a fact (or hard-delete)")
+def memory_fact_delete_route(
+    fact_id: str, hard: bool = Query(default=False)
+) -> Dict[str, Any]:
+    deleted = _memory().delete_fact(fact_id, hard=hard)
+    if not deleted:
+        raise _error(404, f"No fact {fact_id!r}.", "memory_fact_not_found")
+    return {"deleted": True, "fact_id": fact_id, "hard": hard}
+
+
+@router.post("/memory/facts/{fact_id}/restore", summary="Restore a soft-deleted fact")
+def memory_fact_restore_route(fact_id: str) -> Dict[str, Any]:
+    restored = _memory().restore_fact(fact_id)
+    if not restored:
+        raise _error(404, f"No fact {fact_id!r}.", "memory_fact_not_found")
+    return {"restored": True, "fact_id": fact_id}
+
+
+@router.get("/memory/tasks", summary="List resumable tasks")
+def memory_tasks_route(
+    state: Optional[str] = Query(default=None, max_length=32),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    records = _memory().list_tasks(state=state, limit=limit, offset=offset)
+    return {"tasks": [record.to_dict() for record in records], "count": len(records)}
+
+
+@router.post("/memory/tasks", summary="Create a resumable task record")
+def memory_task_create_route(body: MemoryTaskRequest) -> Dict[str, Any]:
+    record = _memory().create_task(
+        body.goal,
+        source_session_id=body.source_session_id,
+        meta=body.meta or None,
+    )
+    if record is None:
+        raise _error(422, "Task goal must not be blank.", "memory_task_rejected")
+    return record.to_dict()
+
+
+@router.get("/memory/tasks/{task_id}", summary="Read one task and its steps")
+def memory_task_route(task_id: str) -> Dict[str, Any]:
+    record = _memory().get_task(task_id)
+    if record is None:
+        raise _error(404, f"No task {task_id!r}.", "memory_task_not_found")
+    return record.to_dict()
+
+
+@router.post("/memory/tasks/{task_id}/cancel", summary="Cancel a resumable task")
+def memory_task_cancel_route(task_id: str) -> Dict[str, Any]:
+    record = _memory().cancel_task(task_id)
+    if record is None:
+        raise _error(404, f"No task {task_id!r}.", "memory_task_not_found")
+    return record.to_dict()
+
+
+@router.post("/memory/tasks/{task_id}/resume", summary="Resume a paused task")
+def memory_task_resume_route(task_id: str) -> Dict[str, Any]:
+    record = _memory().resume_task(task_id)
+    if record is None:
+        raise _error(404, f"No task {task_id!r}.", "memory_task_not_found")
+    return record.to_dict()
+
+
+@router.post("/memory/tasks/{task_id}/complete", summary="Mark a task complete")
+def memory_task_complete_route(task_id: str) -> Dict[str, Any]:
+    record = _memory().complete_task(task_id)
+    if record is None:
+        raise _error(404, f"No task {task_id!r}.", "memory_task_not_found")
+    return record.to_dict()
+
+
+@router.post("/memory/tasks/{task_id}/steps", summary="Append a step to a task")
+def memory_task_step_add_route(
+    task_id: str, body: MemoryTaskStepRequest
+) -> Dict[str, Any]:
+    step = _memory().add_task_step(
+        task_id,
+        body.action,
+        target=body.target,
+        idempotency_key=body.idempotency_key,
+        status=body.status,
+    )
+    if step is None:
+        raise _error(404, f"No task {task_id!r}.", "memory_task_not_found")
+    return step.to_dict()
+
+
+@router.patch(
+    "/memory/tasks/{task_id}/steps/{step_id}", summary="Update a task step"
+)
+def memory_task_step_update_route(
+    task_id: str, step_id: str, body: MemoryTaskStepUpdateRequest
+) -> Dict[str, Any]:
+    try:
+        step = _memory().update_task_step(
+            step_id,
+            status=body.status,
+            result=body.result,
+            verification_status=body.verification_status,
+            error=body.error,
+        )
+    except ValueError as exc:
+        raise _error(422, str(exc), "memory_step_rejected") from exc
+    if step is None or step.task_id != task_id:
+        raise _error(404, f"No step {step_id!r} on task {task_id!r}.", "memory_step_not_found")
+    return step.to_dict()
+
+
+@router.post("/memory/prune", summary="Prune old sessions (dry-run by default)")
+def memory_prune_route(body: MemoryPruneRequest) -> Dict[str, Any]:
+    return _memory().prune(
+        dry_run=body.dry_run, retention_days=body.retention_days
+    )
+
+
+@router.post("/memory/backup", summary="Write a consistent SQLite backup")
+def memory_backup_route() -> Dict[str, Any]:
+    destination = _memory().backup()
+    if destination is None:
+        raise _error(503, "Memory backup failed.", "memory_backup_failed")
+    return {"backup": destination, "integrity": _memory().integrity_check()}
 
 
 # ----------------------------------------------------------------------

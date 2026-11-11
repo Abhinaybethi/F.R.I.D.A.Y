@@ -144,6 +144,14 @@ def resolve_context(transcript: str, context: ShortTermContext) -> tuple[str, st
             url = item.get("url") if isinstance(item, dict) else str(item)
             if url:
                 return (f"play {url}" if want_play else f"go to {url}"), ""
+        # When idx is out of bounds (e.g., first result + previous), check previous_media
+        if direction == "previous" and context.previous_media:
+            prev = context.previous_media[-1] if isinstance(context.previous_media[-1], dict) else {}
+            prev_query = prev.get("query") or context.last_search_query
+            if prev.get("url"):
+                return f"go to {prev['url']}", ""
+            if prev_query:
+                return f"play {prev_query} on youtube", ""
         if direction == "previous":
             return "", "I don't have a previous video in context."
         return "", "I don't have a next video in context."

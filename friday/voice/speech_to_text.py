@@ -1,4 +1,7 @@
+import os
+import sysconfig
 import time
+from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
 
@@ -11,6 +14,62 @@ logger = get_logger(__name__)
 # Silent 1-second audio used for the warm-up run after model load.
 # Runs CTranslate2 kernel compilation so the first real utterance is not penalised.
 _WARMUP_AUDIO = np.zeros(16000, dtype=np.float32)
+
+# CUDA runtime DLLs shipped by the ``nvidia-*`` pip wheels are not on PATH by
+# default on Windows. ``_activate_cuda_dlls`` registers them so CTranslate2 can
+# load cuBLAS / cuDNN without a system-wide CUDA toolkit install.
+_CUDA_DLLS_ACTIVATED = False
+
+
+def _nvidia_dll_dirs() -> list[str]:
+    """Return candidate directories holding pip-installed NVIDIA DLLs."""
+    try:
+        import site
+    except Exception:  # pragma: no cover - site is always available
+        return []
+    roots = []
+    try:
+        roots.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        roots.append(site.getusersitepackages())
+    except Exception:
+        pass
+    roots.append(sysconfig.get_paths().get("purelib", ""))
+
+    dirs: list[str] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root:
+            continue
+        nvidia = Path(root) / "nvidia"
+        if not nvidia.is_dir():
+            continue
+        for sub in ("bin", "lib"):
+            for candidate in sorted(nvidia.glob(f"*/{sub}")):
+                resolved = str(candidate)
+                if resolved not in seen and candidate.is_dir():
+                    seen.add(resolved)
+                    dirs.append(resolved)
+    return dirs
+
+
+def _activate_cuda_dlls() -> None:
+    """Make pip-installed CUDA DLLs discoverable (idempotent)."""
+    global _CUDA_DLLS_ACTIVATED
+    if _CUDA_DLLS_ACTIVATED:
+        return
+    _CUDA_DLLS_ACTIVATED = True
+    for directory in _nvidia_dll_dirs():
+        try:
+            os.add_dll_directory(directory)
+        except (AttributeError, OSError):
+            pass
+        current = os.environ.get("PATH", "")
+        if directory not in current.split(os.pathsep):
+            os.environ["PATH"] = directory + os.pathsep + current
+
 
 
 def _quality_ok(avg_logprob, no_speech_prob):
@@ -29,6 +88,7 @@ def _quality_ok(avg_logprob, no_speech_prob):
 
 def _cuda_is_usable() -> bool:
     """Return True only when CUDA and the required DLLs are genuinely available."""
+    _activate_cuda_dlls()
     try:
         import ctypes
         ctypes.cdll.LoadLibrary("cublas64_12.dll")

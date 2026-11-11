@@ -6,6 +6,7 @@ import { Icon } from "./Icon";
 import { RightRail } from "./RightRail";
 import { Sidebar } from "./Sidebar";
 import { TopNavigation } from "./TopNavigation";
+import { VoiceHologramOverlay } from "./VoiceHologramOverlay";
 
 export function AppShell() {
   const { bootError, booting, connection, refresh } = useDashboard();
@@ -45,6 +46,7 @@ export function AppShell() {
           </ErrorBoundary>
         </aside>
       </div>
+      <VoiceHologramOverlay />
     </div>
   );
 }

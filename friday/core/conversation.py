@@ -22,6 +22,7 @@ from friday.core.transcript_quality import CLARIFICATION, assess_transcript
 from friday.safety.validator import validate, Policy
 from friday.safety.confirmation import parse_confirmation_response, format_confirmation_prompt
 from friday.tools import registry
+from friday import news_skill
 from friday.utils.logger import get_logger
 
 from friday.planning.plan_models import ActionPlan, PlanState
@@ -1485,6 +1486,7 @@ class ConversationManager:
         system_commands_router=None,
         transcript_quality_enabled: bool = True,
         on_progress: Optional[callable] = None,
+        memory_service=None,
     ):
         self.state_machine = StateMachine(ConversationState.IDLE)
         self.context = ConversationContext()
@@ -1492,6 +1494,9 @@ class ConversationManager:
         self.dry_run = dry_run
         self.allow_real_execution = allow_real_execution
         self.reasoner = reasoner or OllamaReasoner()
+        # Persistent memory is optional. When absent (tests, benchmarks, older
+        # callers) every recording hook below is a no-op.
+        self.memory_service = memory_service
         # None means "use registry defaults" (all enabled) — backward compatible
         self.permissions = permissions
         self.on_progress = on_progress
@@ -1543,17 +1548,29 @@ class ConversationManager:
     # Active-session helpers
     # ------------------------------------------------------------------
 
+    def _memory_end_session(self, *, generate_summary: bool = True) -> None:
+        """Close the persistent memory session without ever breaking control flow."""
+        memory = getattr(self, "memory_service", None)
+        if memory is None or not getattr(memory, "enabled", False):
+            return
+        try:
+            memory.end_session(generate_summary=generate_summary)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("[MEMORY] end_session hook failed: %s", exc)
+
     def _check_session_expiry(self):
         """End the active session + clear ephemeral context after user inactivity."""
         if self.session.is_expired():
             logger.info("[SESSION] Session timeout reached")
             self.session.end()
+            self._memory_end_session()
             self.context.clear_ephemeral()
             logger.info("[SESSION] Returning to wake-word mode")
 
     def _end_session_soft(self) -> str:
         """Explicit session end (go to sleep / stop listening) — stays running."""
         self.session.end()
+        self._memory_end_session()
         self.context.clear_ephemeral()
         logger.info("[SESSION] Explicit session end; returning to wake-word mode")
         return "Going to sleep. Say 'Hey Friday' to wake me up."
@@ -1576,9 +1593,16 @@ class ConversationManager:
             self.state_machine.transition_to(ConversationState.IDLE)
         if self.state == ConversationState.IDLE:
             self.state_machine.transition_to(ConversationState.LISTENING)
+        memory = getattr(self, "memory_service", None)
+        if memory is not None and getattr(memory, "enabled", False):
+            try:
+                memory.start_session()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("[MEMORY] start_session hook failed: %s", exc)
 
     def stop_session(self):
         """Transition to STOPPING then IDLE and reset ephemeral session context."""
+        self._memory_end_session()
         self.context = ConversationContext()
         self.state_machine.transition_to(ConversationState.STOPPING)
         self.state_machine.transition_to(ConversationState.IDLE)
@@ -1911,6 +1935,16 @@ class ConversationManager:
             early_cls = None
         if early_cls in _TRANSCRIPT_QUALITY_SKIP_CLASSES:
             return transcript, False
+
+        # Conversational corrections ("no, I meant chrome") are NOT STT self-corrections.
+        # They are user corrections to the assistant's previous action. Skip STT
+        # quality correction for these so the correction handler can process them.
+        low_t = transcript.lower().strip()
+        if (low_t.startswith("no, i meant ") or low_t.startswith("i meant ") or
+            low_t.startswith("no, the ") or low_t.startswith("no, search ") or
+            low_t.startswith("no, ")):
+            return transcript, False
+
         try:
             verdict = assess_transcript(transcript)
         except Exception as exc:  # never let the fast path break the pipeline
@@ -1962,6 +1996,68 @@ class ConversationManager:
         if _LIVE_WEB_LOCAL_FORBIDDEN.search(query):
             return ""
         return query
+
+    def _try_news_summary(self, transcript: str, st_context) -> Optional[tuple]:
+        """Handle NEWS_SUMMARY intent: fetch headlines and summarize via LLM."""
+        # Check if the intent is NEWS_SUMMARY
+        intent = route(transcript)
+        if intent.action != Action.NEWS_SUMMARY:
+            return None
+
+        # Determine if Hindi requested
+        hindi = "hindi" in transcript.lower() or "हिंदी" in transcript
+        region = intent.target.strip() if intent.target else ("Hindi" if hindi else "India")
+
+        try:
+            spoken, headlines = news_skill.summarize_headlines(
+                llm_client=self.reasoner,
+                limit=8,
+                hindi=hindi,
+                region=region,
+            )
+            self.context.last_intent = intent
+            logger.info(
+                "[NEWS] summarized %d headlines for region=%s",
+                len(headlines) if headlines else 0, region,
+            )
+            return self._respond(spoken)
+        except Exception as exc:
+            logger.warning("[NEWS] summarization failed: %s", exc)
+            return self._respond("I couldn't retrieve live news right now. Please try again shortly.")
+
+    def _try_news_deep_dive(self, transcript: str) -> Optional[tuple]:
+        """Handle deep-dive follow-up: 'tell me more about number N' or 'more details on <topic>'."""
+        low = transcript.lower().strip()
+        # Patterns for deep-dive requests
+        # Only match explicit number references or article references
+        # "tell me more about number 3", "more details on 2", "expand on number 1"
+        number_patterns = [
+            r"^tell\s+me\s+more\s+about\s+(?:number\s+)?(\d+)$",
+            r"^more\s+details?\s+(?:on|about|for)\s+(?:number\s+)?(\d+)$",
+            r"^expand\s+on\s+(?:number\s+)?(\d+)$",
+            r"^what\s+about\s+(?:number\s+)?(\d+)$",
+            # Explicit article references
+            r"^tell\s+me\s+more\s+about\s+(?:that\s+)?(?:article|headline|story)$",
+            r"^more\s+details?\s+(?:on|about)\s+(?:that\s+)?(?:article|headline|story)$",
+        ]
+
+        match_text = None
+        for pattern in number_patterns:
+            m = re.match(pattern, low, re.IGNORECASE)
+            if m:
+                match_text = m.group(1).strip() if m.lastindex else m.group(0).strip()
+                break
+
+        if not match_text:
+            return None
+
+        try:
+            spoken = news_skill.deep_dive(llm_client=self.reasoner, number_or_topic=match_text)
+            logger.info("[NEWS] deep_dive for %s", match_text)
+            return self._respond(spoken)
+        except Exception as exc:
+            logger.warning("[NEWS] deep_dive failed: %s", exc)
+            return self._respond("I couldn't fetch more details for that.")
 
     def _try_research(self, transcript: str, st_context) -> Optional[tuple]:
         """Optionally run the research subsystem for *transcript*.
@@ -2109,7 +2205,7 @@ class ConversationManager:
                 except KeyError:
                     return self._respond("I didn't understand that.")
                 self.context.last_intent = intent
-                policy = validate(intent)
+                policy = validate(intent, dry_run=self.dry_run)
                 if policy == Policy.REJECT:
                     return self._respond("I didn't understand that.")
                 if policy == Policy.CONFIRM:
@@ -2224,7 +2320,7 @@ class ConversationManager:
         self.context.push_turn()
         return final_response, True
 
-    def handle_transcript(self, transcript: str) -> tuple[str, bool]:
+    def _handle_transcript_impl(self, transcript: str) -> tuple[str, bool]:
         """
         Process a user transcript.
 
@@ -2292,6 +2388,7 @@ class ConversationManager:
         # stop friday) resolve deterministically here — never to the reasoner.
         if norm_trans in _EXIT_UTTERANCES:
             self.session.end()
+            self._memory_end_session()
             self.context.pending_intent = None
             if self.context.current_plan:
                 self.context.current_plan.state = PlanState.CANCELLED
@@ -2385,7 +2482,7 @@ class ConversationManager:
                             intent = route(resolved_text)
                             if intent.action != Action.UNKNOWN:
                                 self.context.last_intent = intent
-                                policy = validate(intent)
+                                policy = validate(intent, dry_run=self.dry_run)
                                 if policy == Policy.SAFE:
                                     self.state_machine.transition_to(ConversationState.EXECUTING)
                                     result = registry.execute(
@@ -2483,6 +2580,17 @@ class ConversationManager:
                             transcript, live_query,
                         )
                         return self._execute_single_intent(live_intent)
+
+            # News summary intent — handle before research agent
+            news_reply = self._try_news_summary(transcript, st_context)
+            if news_reply is not None:
+                return news_reply
+
+            # Deep-dive follow-up: "tell me more about number 3" or "more details on <topic>"
+            deep_dive_reply = self._try_news_deep_dive(transcript)
+            if deep_dive_reply is not None:
+                return deep_dive_reply
+
             if not live_query:
                 research_ran = True
                 research_reply = self._try_research(transcript, st_context)
@@ -2588,6 +2696,12 @@ class ConversationManager:
                 intent = route(resolved_text)
         else:
             intent = route(resolved_text)
+
+        # NEWS_SUMMARY — handle via news skill before Live Research Gate
+        if intent.action == Action.NEWS_SUMMARY:
+            news_reply = self._try_news_summary(transcript, st_context)
+            if news_reply is not None:
+                return news_reply
 
         # --- Live Research Gate ---
         # Current-information / news queries reach the web research subsystem
@@ -2698,8 +2812,21 @@ class ConversationManager:
             self.context.last_response = "Stopped."
             return "Stopped.", True
 
+        # NEWS_SUMMARY — handle via news skill (bypasses registry)
+        if intent.action == Action.NEWS_SUMMARY:
+            news_reply = self._try_news_summary(transcript, st_context)
+            if news_reply is not None:
+                return news_reply
+            # If news skill couldn't handle it, fall through to error response
+            self.state_machine.transition_to(ConversationState.RESPONDING)
+            self.state_machine.transition_to(ConversationState.LISTENING)
+            response = "I couldn't retrieve live news right now. Please try again shortly."
+            self.context.last_response = response
+            self.context.push_turn()
+            return response, True
+
         # Safety Validation
-        policy = validate(intent)
+        policy = validate(intent, dry_run=self.dry_run)
 
         if policy == Policy.REJECT:
             self.state_machine.transition_to(ConversationState.RESPONDING)
@@ -2724,3 +2851,59 @@ class ConversationManager:
 
         # Policy: SAFE
         return self._execute_single_intent(intent)
+
+
+    # ------------------------------------------------------------------
+    # Persistent memory recording wrapper
+    # ------------------------------------------------------------------
+    _MEMORY_SKIP_UTTERANCES = _EXIT_UTTERANCES | {
+        "go to sleep", "stop listening", "end session", "go idle", "sleep",
+    }
+
+    def handle_transcript(
+        self, transcript: str, turn_id: Optional[str] = None
+    ) -> tuple[str, bool]:
+        """Public turn entry point: process, then persist the turn best-effort.
+
+        Recording happens *after* the response is produced so a memory failure
+        can never change or delay the answer. ``turn_id`` lets an HTTP/voice
+        caller supply a stable id so retries do not create a second row.
+        """
+        memory = getattr(self, "memory_service", None)
+        before_intent = getattr(self.context, "last_intent", None)
+        before_tool = getattr(self.context, "last_tool_result", None)
+        before_resolved = getattr(self.context, "last_resolved_query", "")
+
+        result = self._handle_transcript_impl(transcript)
+
+        if memory is None or not getattr(memory, "enabled", False):
+            return result
+        text = (transcript or "").strip()
+        if not text or normalize(text) in self._MEMORY_SKIP_UTTERANCES:
+            return result
+
+        try:
+            response_text = result[0] if result else ""
+            intent = None
+            current_intent = getattr(self.context, "last_intent", None)
+            if current_intent is not before_intent:
+                intent = current_intent
+            tool_result = None
+            current_tool = getattr(self.context, "last_tool_result", None)
+            if current_tool is not before_tool:
+                tool_result = current_tool
+            resolved = getattr(self.context, "last_resolved_query", "") or ""
+            if resolved == before_resolved:
+                resolved = ""
+            memory.record_turn(
+                raw_text=text,
+                response_text=response_text,
+                resolved_text=resolved,
+                intent=intent,
+                tool_result=tool_result,
+                topic=getattr(self.context, "active_topic", "") or "",
+                message_id=turn_id,
+            )
+        except Exception as exc:  # pragma: no cover - memory must never break a turn
+            logger.debug("[MEMORY] turn recording failed: %s", exc)
+        return result

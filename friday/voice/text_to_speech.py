@@ -96,6 +96,86 @@ class TextToSpeech:
     def is_speaking(self):
         return self._is_speaking
 
+    def synthesize_wav(self, text: str) -> bytes:
+        """Render *text* to a single WAV byte string without playing it.
+
+        The dashboard's ``/api/voice/speak`` endpoint returns these bytes to
+        the browser for playback, so this path must never touch the local
+        output device. Each sentence is synthesized into its own buffer and
+        the raw frames are concatenated: Piper re-applies the WAV format on
+        every ``synthesize_wav`` call, which makes a shared writer invalid.
+        """
+        clean_text = self._clean_for_speech(text)
+        if not clean_text:
+            return b""
+
+        engine = None
+        if self.engine_name == "piper" and self.piper is not None:
+            engine = "piper"
+        elif self.engine_name == "kokoro" and self.kokoro is not None:
+            engine = "kokoro"
+        elif self.fallback_engine == "piper" and self.piper is not None:
+            engine = "piper"
+        elif self.fallback_engine == "kokoro" and self.kokoro is not None:
+            engine = "kokoro"
+        elif self.piper is not None:
+            engine = "piper"
+        elif self.kokoro is not None:
+            engine = "kokoro"
+
+        if engine == "piper":
+            return self._synthesize_wav_piper(clean_text)
+        if engine == "kokoro":
+            return self._synthesize_wav_kokoro(clean_text)
+        raise RuntimeError("No TTS engine is available to synthesize speech.")
+
+    def _synthesize_wav_piper(self, text: str) -> bytes:
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()] or [text]
+        config = getattr(self.piper, "config", None)
+        sample_rate = int(getattr(config, "sample_rate", 22050) or 22050)
+        channels = 1
+        sampwidth = 2
+        frames = bytearray()
+
+        for sentence in sentences:
+            buffer = io.BytesIO()
+            with wave.open(buffer, "wb") as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(sampwidth)
+                wav_file.setframerate(sample_rate)
+                self.piper.synthesize_wav(sentence, wav_file)
+            buffer.seek(0)
+            with wave.open(buffer, "rb") as wav_file:
+                channels = wav_file.getnchannels()
+                sampwidth = wav_file.getsampwidth()
+                sample_rate = wav_file.getframerate()
+                frames.extend(wav_file.readframes(wav_file.getnframes()))
+
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(sampwidth)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(bytes(frames))
+        return output.getvalue()
+
+    def _synthesize_wav_kokoro(self, text: str) -> bytes:
+        import numpy as np
+
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()] or [text]
+        chunks = []
+        sample_rate = 24000
+        for sentence in sentences:
+            samples, sample_rate = self.kokoro.create(
+                sentence, voice=self.voice, speed=self.speed, lang="en-us"
+            )
+            chunks.append(np.asarray(samples, dtype=np.float32).reshape(-1))
+
+        data = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        buffer = io.BytesIO()
+        sf.write(buffer, data, int(sample_rate), format="WAV", subtype="PCM_16")
+        return buffer.getvalue()
+
     def speak(self, text: str) -> None:
         if not text:
             return

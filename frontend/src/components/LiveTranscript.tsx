@@ -10,7 +10,7 @@ export function LiveTranscript({ limit = 40 }: { limit?: number }) {
     return (
       <EmptyState
         title="No transcript yet"
-        description="Transcript entries appear only when the backend processes a real turn. Live microphone capture is owned by the desktop runtime and is not active in this web layer."
+        description="Transcript entries appear after a real turn. Record from the browser microphone or type a message to start a conversation."
         icon="chat"
       />
     );

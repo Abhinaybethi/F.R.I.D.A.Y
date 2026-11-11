@@ -10,8 +10,13 @@ import argparse
 
 import uvicorn
 
+from friday.utils.env_loader import load_dotenv
+
 
 def main() -> None:
+    # The dashboard backend reads provider credentials (NVIDIA key) from .env.
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="F.R.I.D.A.Y dashboard server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8420)

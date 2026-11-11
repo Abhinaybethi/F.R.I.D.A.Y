@@ -21,6 +21,7 @@ export type IconName =
   | "minimize"
   | "maximize"
   | "refresh"
+  | "pause"
   | "send"
   | "trash"
   | "copy"
@@ -32,7 +33,12 @@ export type IconName =
   | "chip"
   | "warning"
   | "spark"
-  | "chevron";
+  | "chevron"
+  | "archive"
+  | "calendar"
+  | "task"
+  | "plus"
+  | "toggle";
 
 const PATHS: Record<IconName, string> = {
   home: "M3 10.8 12 3l9 7.8M5.5 9.5V21h13V9.5M9.5 21v-6h5v6",
@@ -53,6 +59,7 @@ const PATHS: Record<IconName, string> = {
   minimize: "M5 12h14",
   maximize: "M5 5h14v14H5z",
   refresh: "M20 12a8 8 0 1 1-2.4-5.7M20 4v4h-4",
+  pause: "M9 5v14M15 5v14",
   send: "M21 3 10.5 13.5M21 3l-6.5 18-4-8-8-4L21 3Z",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6",
   copy: "M9 9h11v11H9zM15 9V4H4v11h5",
@@ -65,6 +72,11 @@ const PATHS: Record<IconName, string> = {
   warning: "M12 3 2.5 20h19L12 3ZM12 9v5M12 17.2v.1",
   spark: "M12 2.5 14 9l6.5 2-6.5 2-2 6.5-2-6.5L3.5 11 10 9l2-6.5Z",
   chevron: "m9 6 6 6-6 6",
+  archive: "M3 7h18v4H3zM5 11v9h14v-9M9 15h6",
+  calendar: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4M8 14h2M14 14h2",
+  task: "M4 6h4v4H4zM11 8h9M4 14h4v4H4zM11 16h9",
+  plus: "M12 5v14M5 12h14",
+  toggle: "M8 7h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 7Zm8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
 };
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

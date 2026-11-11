@@ -30,6 +30,7 @@ class Action(Enum):
     UNMUTE_AUDIO  = auto()
     PAUSE_MEDIA   = auto()
     IMAGE_GENERATION = auto()
+    NEWS_SUMMARY     = auto()
     UNKNOWN       = auto()
 
 
